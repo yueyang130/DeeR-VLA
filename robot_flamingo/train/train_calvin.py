@@ -59,6 +59,7 @@ def main():
     parser.add_argument("--use_media_placement_augmentation", action="store_true")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--num_epochs", type=int, default=1)
+    parser.add_argument("--save_freq", type=int, default=1)
     parser.add_argument("--window_size", type=int, default=32)
     parser.add_argument(
         "--logging_steps", type=int, default=100, help="log loss every n steps"
@@ -308,6 +309,8 @@ def main():
     parser.add_argument("--llm_name", type=str, default='llama_9b')
     parser.add_argument("--pooling", type=str, default='max')
     parser.add_argument("--multi_step_action", type=int, default=1, help="multiple step action prediction")
+    
+    parser.add_argument("--early_exit_layer", type=int, default=-1)
 
     args = parser.parse_args()
     
@@ -370,6 +373,7 @@ def main():
         fwd_pred_hand=args.fwd_pred_hand,
         no_image_patch=args.no_image_patch,
         global_latent=args.global_latent,
+        early_exit_layer=args.early_exit_layer,
     )
 
     checkpoint_path = args.openflamingo_checkpoint
@@ -552,18 +556,19 @@ def main():
                 wandb=wandb,
             )
 
-        if args.rank == 0:
+        if args.rank == 0 and epoch % args.save_freq == 0:
             if not os.path.exists(args.run_name):
                 os.makedirs(args.run_name)
 
             checkpoint_dict = {
                 "epoch": epoch,
+                "early_exit_layer": args.early_exit_layer,
                 "model_state_dict": get_checkpoint(ddp_model),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "lr_scheduler_state_dict": lr_scheduler.state_dict(),
             }
 
-            ckpt_name = get_ckpt_name(args, epoch)
+            ckpt_name = get_ckpt_name(args, epoch, args.early_exit_layer)
             ckpt_path = os.path.join(args.run_name, ckpt_name)
 
             print(f"Saving checkpoint to {ckpt_path}")

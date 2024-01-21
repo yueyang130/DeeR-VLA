@@ -43,8 +43,8 @@ import pyrender
 logger = logging.getLogger(__name__)
 
 EP_LEN = 360
-NUM_SEQUENCES = 1000
-# NUM_SEQUENCES = 400
+# NUM_SEQUENCES = 1000
+NUM_SEQUENCES = 100
 
 def get_cast_dtype(precision: str):
     cast_dtype = None

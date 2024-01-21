@@ -30,11 +30,11 @@ def get_autocast(precision):
         return suppress
     
 
-def get_ckpt_name(args, epoch=-1):
+def get_ckpt_name(args, epoch=-1, early_exit_layer=-1):
     if args.use_gripper:
-        ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_')
+        ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', early_exit_layer)
     else:
-        ckpt_name = 'checkpoint_no_gripper_hist_{}_{}'.format(args.hist_window, '' if not args.sep_resampler else 'sep_')
+        ckpt_name = 'checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.hist_window, '' if not args.sep_resampler else 'sep_', early_exit_layer)
     if args.real_data:
         ckpt_name += 'real_'
     if args.train_params != -1:
@@ -562,6 +562,17 @@ def train_one_epoch_calvin(
             )
 
         # compute loss
+        # if args.rank == 0:
+            # print(len(output.hidden_states)) # number of attention layers (24 for MPT-1B)
+            # Note: the dim of language tokens in a task is the token dim of Transformer since Flamingo is for visual understanding
+            # Then the dim of action seqence is aggregated by LSTM head for decision.
+            # print(output.hidden_states[0].shape, output.hidden_states[-1].shape)  # (bs * action_seq_len, lang_len, d)
+            # print(output.hidden_states[0].requires_grad)
+            # print(output.logits[0].shape) # (bs, action_seq_len, 6)
+            # print(output.logits[0].requires_grad) # (bs, action_seq_len, 6)
+            # print(output.logits[1].shape) # (bs, action_seq_len, 1)
+            # print(labels[0].shape)
+            # print(labels[1].shape)
         num_actions, bin_actions = output.logits[0], output.logits[1]
 
         # reshape for loss calculation

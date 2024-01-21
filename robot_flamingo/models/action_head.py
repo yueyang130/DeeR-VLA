@@ -318,9 +318,9 @@ class DeterministicDecoder(ActionDecoder):
         
         
         # reshape
-        if input_feature.dim() == 3:
+        if input_feature.dim() == 3: # (bs * action_seq_len, lang_len, d)
             if self.fusion_mode == 'two_way':
-                input_feature = input_feature.reshape(-1, self.window_size, *input_feature.shape[1:])
+                input_feature = input_feature.reshape(-1, self.window_size, *input_feature.shape[1:]) 
                 
                 bs = int(input_feature.shape[0] // 2)
                 
@@ -332,8 +332,8 @@ class DeterministicDecoder(ActionDecoder):
                 
                 input_feature = torch.cat([rgb_feat, gripper_feat], dim=-1)
             else:
-                input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1)
-        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1])
+                input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (bs * seq_len, d) maxpooling along lang_seq
+        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (bs, seq_len, d)
         if self.return_feature:
             org_feat = copy.deepcopy(input_feature) 
             org_feat = org_feat.view(self.window_size, org_feat.shape[-1])
@@ -353,7 +353,7 @@ class DeterministicDecoder(ActionDecoder):
         
         if not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase):
             # print('history len:',self.history_len)
-            if input_feature.shape[1] == 1:
+            if input_feature.shape[1] == 1:  # the first frame of an action sequence
                 self.history_memory.append(input_feature)
                 if len(self.history_memory) <= self.history_len:
                     # print('cur hist_mem len: {}'.format(len(self.history_memory)))
@@ -376,7 +376,7 @@ class DeterministicDecoder(ActionDecoder):
             else:
                 # print('input feature lenght > 1', input_feature.shape)
                 self.hidden_state = h_0
-                x, h_n = self.rnn(input_feature, self.hidden_state)
+                x, h_n = self.rnn(input_feature, self.hidden_state) # (bs, seq_len, d) --> (bs, seq_len, d) LSTM go along action seqence
                 self.hidden_state = h_n
                 if self.last_action:
                     x = x[:, -1].unsqueeze(1)
