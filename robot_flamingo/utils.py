@@ -1,12 +1,12 @@
 import logging
 
 import numpy as np
-from pytorch3d.transforms import (
-    euler_angles_to_matrix,
-    matrix_to_euler_angles,
-    matrix_to_quaternion,
-    quaternion_to_matrix,
-)
+# from pytorch3d.transforms import (
+#     euler_angles_to_matrix,
+#     matrix_to_euler_angles,
+#     matrix_to_quaternion,
+#     quaternion_to_matrix,
+# )
 import torch
 from torch.cuda.amp import autocast
 

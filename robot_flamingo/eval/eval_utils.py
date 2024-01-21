@@ -374,7 +374,7 @@ def evaluate_policy(model, env, epoch, calvin_conf_path, eval_log_dir=None, debu
     task_cfg = OmegaConf.load(conf_dir / "callbacks/rollout/tasks/new_playtable_tasks.yaml")
     task_oracle = hydra.utils.instantiate(task_cfg)
     if diverse_inst:
-        with open('/mnt/bn/robotics/lxh/robot-flamingo/enrich_lang_annotations.json', 'r') as f:
+        with open('./enrich_lang_annotations.json', 'r') as f:
             val_annotations = json.load(f)
     else:
         val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
@@ -426,13 +426,13 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
     
     # val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
     if diverse_inst:
-        with open('/mnt/bn/robotics/lxh/robot-flamingo/lang_annotation_cache.json', 'r') as f:
+        with open('./lang_annotation_cache.json', 'r') as f:
             val_annotations = json.load(f)
     else:
         val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
 
     eval_log_dir = get_log_dir(eval_log_dir)
-    with open('/mnt/bn/robotics/lxh/robot-flamingo/eval_sequences.json', 'r') as f:
+    with open('./eval_sequences.json', 'r') as f:
         eval_sequences = json.load(f)
     device_num = int(torch.distributed.get_world_size())
     device_id = torch.distributed.get_rank()
@@ -667,7 +667,7 @@ def main():
 
 def generate_zero_shot_instr():
     random.seed(123)
-    with open('/mnt/bn/robotics/lxh/robot-flamingo/enrich_lang_annotations.json', 'r') as f:
+    with open('./enrich_lang_annotations.json', 'r') as f:
             val_annotations = json.load(f)
     eval_sequences = get_sequences(NUM_SEQUENCES)
     
@@ -677,12 +677,12 @@ def generate_zero_shot_instr():
         for subtask_i, subtask in enumerate(eval_sequence):
             res.append(random.choice(val_annotations[subtask]))
         all_res.append(res)
-    with open('/mnt/bn/robotics/lxh/robot-flamingo/lang_annotation_cache.json', 'w') as f:
+    with open('./lang_annotation_cache.json', 'w') as f:
         json.dump(all_res, f, indent=1)
 
 
 def save_sequences():
     random.seed(123)
     eval_sequences = get_sequences(NUM_SEQUENCES)
-    with open('/mnt/bn/robotics/lxh/robot-flamingo/eval_sequences.json', 'w') as f:
+    with open('./eval_sequences.json', 'w') as f:
         json.dump(eval_sequences, f)

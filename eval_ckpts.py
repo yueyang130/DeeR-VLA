@@ -1,8 +1,12 @@
 import os
+import glob
 
 ckpt_dir = 'RobotFlamingoDBG'
+search_path = os.path.join(ckpt_dir,  '*.pth')
+ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
+ckpt_names.sort(reverse=True)
+ckpt_names = ckpt_names[-1:]
 
-ckpt_names = ['checkpoint_gripper_post_hist_1_aug_10_4_traj_cons_ws_12_mpt_9b_4.pth', 'checkpoint_gripper_post_hist_1_aug_10_4_traj_cons_ws_12_mpt_9b_3.pth', 'checkpoint_gripper_post_hist_1_aug_10_4_traj_cons_ws_12_mpt_9b_2.pth']
 print(ckpt_names)
 for ckpt_name in ckpt_names:
     use_gripper = 1 if 'gripper' in ckpt_name else 0

@@ -345,6 +345,8 @@ def main():
         if name in args.evaluate_from_checkpoint:
             args.llm_name = name
             break
+        
+    print(f'Model class : {args.llm_name}')
     
     args.lm_path = mpt_dict[args.llm_name]["lang_encoder_path"]
     args.tokenizer_path = mpt_dict[args.llm_name]["tokenizer_path"]
@@ -435,7 +437,10 @@ def main():
     if args.rank == 0:
         print(f"Loading robot-flamingo checkpoint from {args.evaluate_from_checkpoint}")
     checkpoint = torch.load(args.evaluate_from_checkpoint, map_location="cpu")
-    ddp_model.load_state_dict(checkpoint["model_state_dict"], False)  # 只保存了求梯度的部分
+    try:
+        ddp_model.load_state_dict(checkpoint["model_state_dict"], False)  # 只保存了求梯度的部分
+    except:
+        ddp_model.load_state_dict(checkpoint, False)  # 只保存了求梯度的部分
 
     ddp_model.eval()
     eval_log_dir = None

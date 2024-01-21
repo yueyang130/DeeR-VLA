@@ -16,10 +16,10 @@ mpt_dict = {
         "openflamingo_checkpoint": "path_to/OpenFlamingo-3B-vitl-mpt1b/checkpoint.pt"
     }, 
     "mpt_dolly_3b": {
-        "lang_encoder_path": "path_to/mpt-1b-redpajama-200b-dolly", 
-        "tokenizer_path": "path_to/mpt-1b-redpajama-200b-dolly", 
+        "lang_encoder_path": "/mnt/bn/yueyang/archive/mpt-1b-redpajama-200b-dolly", 
+        "tokenizer_path": "/mnt/bn/yueyang/archive/mpt-1b-redpajama-200b-dolly", 
         "cross_attn_every_n_layers": 1,
-        "openflamingo_checkpoint": "path_to/OpenFlamingo-3B-vitl-mpt1b-langinstruct/checkpoint.pt"
+        "openflamingo_checkpoint": "/mnt/bn/yueyang/archive/OpenFlamingo-3B-vitl-mpt1b-langinstruct.pt"
     },
     "mpt_4b": {
         "lang_encoder_path": "path_to/RedPajama-INCITE-Instruct-3B-v1", 

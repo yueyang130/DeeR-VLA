@@ -14,7 +14,9 @@ numpy==1.24.4
 numpy-quaternion==2022.4.3
 omegaconf==2.3.0
 open-clip-torch==2.20.0
-opencv-python==3.4.8.29
+opencv-python
+# opencv-python==3.4.8.29
+opencv-python
 packaging==23.2
 pandas==2.0.3
 pathtools==0.1.2
@@ -23,7 +25,8 @@ pyparsing==3.1.1
 pyrender==0.1.45
 python-dateutil==2.8.2
 pytorch-lightning==1.8.6
-pytorch3d==0.3.0
+# pytorch3d==0.3.0
+# pytorch3d
 PyYAML==6.0.1
 regex==2023.5.5
 requests==2.31.0
@@ -35,14 +38,18 @@ sacremoses==0.0.53
 safetensors==0.4.0
 scikit-image==0.19.3
 scikit-learn==1.2.2
-scipy==1.5.2
+# scipy==1.5.2
 sentence-transformers==2.2.2
-torch==1.12.1+cu113
-torchaudio==0.12.1+cu113
-torchvision==0.13.1+cu113
+# torch==1.12.1+cu113
+# torchaudio==0.12.1+cu113
+# torchvision==0.13.1+cu113
 tqdm==4.66.1
 transformers==4.33.1
 wandb==0.15.2
 yarl==1.9.2
 zarr==2.15.0
 zipp==3.17.0
+braceexpand
+webdataset
+einops_exts
+open_clip_torch>=2.16.0

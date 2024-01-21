@@ -66,7 +66,7 @@ def main():
     # Sum of gradient optimization batch size
     parser.add_argument("--batch_size_calvin", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
-    parser.add_argument("--openflamingo_checkpoint", type=str, default="")
+    # parser.add_argument("--openflamingo_checkpoint", type=str, default="")
     parser.add_argument(
         "--resume_from_checkpoint",
         type=str,
@@ -395,7 +395,7 @@ def main():
     if args.rank == 0 and args.report_to_wandb:
         wandb.init(
             project=args.wandb_project,
-            entity=args.wandb_entity,
+            # entity=args.wandb_entity,
             name=args.run_name,
             config=vars(args),
         )
