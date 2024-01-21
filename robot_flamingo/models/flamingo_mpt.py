@@ -160,10 +160,15 @@ class MPTFlamingo(nn.Module):
         if sep_lm_head:
             self.lm_head = self.lang_encoder.lm_head
             self.lang_encoder.lm_head = nn.Identity()
-            
-        assert -lang_encoder.config.n_layers <= early_exit_layer < lang_encoder.config.n_layers
+        
+        if early_exit_layer < 0:
+            early_exit_layer += lang_encoder.config.n_layers
+          
+        assert 0 <= early_exit_layer < lang_encoder.config.n_layers
         print(f'Early Exit from Layer{early_exit_layer}')
         self.early_exit_layer = early_exit_layer
+
+        self.lang_encoder._delete_decoder_layers(list(range(early_exit_layer+1, lang_encoder.config.n_layers)))
 
     def forward(
         self,
@@ -239,7 +244,7 @@ class MPTFlamingo(nn.Module):
             output_hidden_states=True
         )
 
-        output_hs = output.hidden_states[self.early_exit_layer]
+        output_hs = output.hidden_states[-1]
         output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature)
         output.logits = output_hs
         

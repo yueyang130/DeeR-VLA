@@ -96,6 +96,16 @@ class FlamingoLMMixin(nn.Module):
 
     def _set_decoder_layers(self, value):
         setattr_recursive(self, self.decoder_layers_attr_name, value)
+        
+    def _delete_decoder_layers(self, indices):
+        indices = sorted(indices, reverse=True)
+        print(f'deleting layers {indices} in Flamingo...')
+        layers = self._get_decoder_layers()
+        for i in indices:
+            del layers[i]
+            del self.gated_cross_attn_layers[i]
+            del self.old_decoder_blocks[i]
+        print(f'Now the number of layer is {len(self._get_decoder_layers())}')
 
     def init_flamingo(
         self,

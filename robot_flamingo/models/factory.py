@@ -179,6 +179,7 @@ def create_model_and_transforms(
                 self.transformer.wte = new_embeddings
         extend_instance(lang_encoder, EmbeddingFnMixin)
     
+    # extend MPT to Mixin (add cross-attention layers to a language model)
     extend_instance(lang_encoder, FlamingoLMMixin)
     
     if decoder_layers_attr_name is None:
@@ -238,6 +239,7 @@ def create_model_and_transforms(
     # model.perceiver.requires_grad_(True)
     if train_params == -1:
         model.lang_encoder.gated_cross_attn_layers.requires_grad_(True)
+        print(f'{len(model.lang_encoder.gated_cross_attn_layers)=}')
         model.perceiver.requires_grad_(True)
     else:
         param_per_layer = 140
