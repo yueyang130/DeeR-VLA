@@ -654,9 +654,11 @@ def train_one_epoch_calvin(
                 wandb.log(
                     {
                         "loss_calvin": divided_loss_calvin.item(),
+                        "loss_calvin_bin": loss_calvin_bin.item(),
+                        "loss_calvin_num": loss_calvin_num.item(),
                         "global_step": global_step,
                     },
-                    commit=False,
+                    commit=True,
                 )
 
 

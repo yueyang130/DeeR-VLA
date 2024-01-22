@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 EP_LEN = 360
 # NUM_SEQUENCES = 1000
-NUM_SEQUENCES = 100
+NUM_SEQUENCES = 50
 
 def get_cast_dtype(precision: str):
     cast_dtype = None

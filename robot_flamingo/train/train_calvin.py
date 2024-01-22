@@ -26,6 +26,7 @@ from transformers import (
 
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
 
+os.environ['WANDB_MODE'] = 'offline'
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed + rank)

@@ -2,10 +2,10 @@ import os
 import glob
 
 ckpt_dir = 'RobotFlamingoDBG'
-search_path = os.path.join(ckpt_dir,  '*.pth')
+search_path = os.path.join(ckpt_dir,  '*pth*.pth')
 ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
-ckpt_names = ckpt_names[-1:]
+# ckpt_names = ckpt_names[-1:]
 
 print(ckpt_names)
 for ckpt_name in ckpt_names:
