@@ -38,13 +38,13 @@ from calvin_env.envs.play_table_env import get_env
 from robot_flamingo.data.data import preprocess_image, preprocess_text_calvin
 from robot_flamingo.utils import world_to_tcp_frame, tcp_to_world_frame
 import functools
-os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
+# os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
 import pyrender
 logger = logging.getLogger(__name__)
 
 EP_LEN = 360
 # NUM_SEQUENCES = 1000
-NUM_SEQUENCES = 50
+NUM_SEQUENCES = 56
 
 def get_cast_dtype(precision: str):
     cast_dtype = None

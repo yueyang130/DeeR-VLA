@@ -18,13 +18,23 @@ use_gripper=$3
 use_state=$4
 fusion_mode=$5
 window_size=$6
+node_num=$7
+single_step=$8
 export MESA_GL_VERSION_OVERRIDE=4.1
 echo logging to ${log_file}
-node_num=2
+
+if [ $single_step = true ]; then
+    script=eval_calvin_single_step.py
+    echo "EVAL IN SINGLE STEP MODE"
+else
+    script=eval_calvin.py
+    echo "EVAL IN LONG HORIZON MODE"
+fi
+
 
 if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 1 ]
 then
-torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6066 robot_flamingo/eval/eval_calvin.py \
+torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6066 robot_flamingo/eval/$script \
     --precision fp32 \
     --use_gripper \
     --use_state \
@@ -40,7 +50,7 @@ fi
 
 if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 0 ]
 then
-torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6099 robot_flamingo/eval/eval_calvin.py \
+torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6021 robot_flamingo/eval/$script \
     --precision fp32 \
     --use_gripper \
     --window_size ${window_size} \
@@ -55,7 +65,7 @@ fi
 
 if [ ${use_gripper} -eq 0 ] && [ ${use_state} -eq 0 ]
 then
-torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6066 robot_flamingo/eval/eval_calvin.py \
+torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6066 robot_flamingo/eval/$script \
     --precision fp32 \
     --run_name RobotFlamingoDBG \
     --window_size ${window_size} \

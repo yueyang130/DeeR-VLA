@@ -7,8 +7,9 @@ import random
 from robot_flamingo.eval.eval_utils import eval_one_epoch_calvin_ddp
 from torch.distributed.elastic.multiprocessing.errors import record
 
-# os.environ['PYOPENGL_PLATFORM'] = 'egl'
-os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
+# please use EGL for GPU-accelerating rendering. Don't use osmesa (CPU-only software rendering), which causes texture discrepancy from GPU rendering.
+os.environ['PYOPENGL_PLATFORM'] = 'egl'
+# os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
 import numpy as np
 import torch
 import wandb
@@ -300,7 +301,6 @@ def main():
     parser.add_argument("--pooling", type=str, default='max')
     parser.add_argument("--multi_step_action", type=int, default=1, help="multiple step action prediction")
 
-    parser.add_argument("--early_exit_layer", type=int, default=-1)
 
     args = parser.parse_args()
     
@@ -365,7 +365,17 @@ def main():
     print("device_id: ", device_id)
     print("world_size: ", torch.distributed.get_world_size())
     random_seed(args.seed)
-
+    
+    # if args.evaluate_from_checkpoint is specified, load checkpoint
+    assert args.evaluate_from_checkpoint is not None, "Please specify a checkpoint to evaluate."
+    if args.rank == 0:
+        print(f"Loading robot-flamingo checkpoint from {args.evaluate_from_checkpoint}")
+    checkpoint = torch.load(args.evaluate_from_checkpoint, map_location="cpu")
+    if 'early_exit_layer' in checkpoint:
+        early_exit_layer = checkpoint['early_exit_layer']
+    else:
+        early_exit_layer = -1
+    
     model, image_processor, tokenizer = create_model_and_transforms(
         args.vision_encoder_path,
         args.vision_encoder_pretrained,
@@ -402,7 +412,7 @@ def main():
         fwd_pred_hand=args.fwd_pred_hand,
         no_image_patch=args.no_image_patch,
         global_latent=args.global_latent,
-        early_exit_layer=args.early_exit_layer,
+        early_exit_layer=early_exit_layer,
         # refresh=args.refresh
     )
     checkpoint_path = args.openflamingo_checkpoint
@@ -435,11 +445,7 @@ def main():
     ddp_model = DDP(model, device_ids=[device_id])
     if args.residual:
         model.lang_encoder.clone_parameters()
-    # if args.evaluate_from_checkpoint is specified, load checkpoint
-    assert args.evaluate_from_checkpoint is not None, "Please specify a checkpoint to evaluate."
-    if args.rank == 0:
-        print(f"Loading robot-flamingo checkpoint from {args.evaluate_from_checkpoint}")
-    checkpoint = torch.load(args.evaluate_from_checkpoint, map_location="cpu")
+
     try:
         ddp_model.load_state_dict(checkpoint["model_state_dict"], False)  # 只保存了求梯度的部分
     except:

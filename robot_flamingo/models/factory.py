@@ -8,6 +8,7 @@ from open_flamingo.src.flamingo_lm import FlamingoLMMixin
 from open_flamingo.src.utils import extend_instance
 from open_flamingo.src.factory import _infer_decoder_layers_attr_name
 
+clip_path = "/mnt/bn/yueyang/archive/clip"
 mpt_dict = {
     "mpt_3b": {
         "lang_encoder_path": "path_to/mpt-1b-redpajama-200b", 
@@ -128,7 +129,8 @@ def create_model_and_transforms(
         Tokenizer: A tokenizer for the language model
     """
     vision_encoder, _, image_processor = open_clip.create_model_and_transforms(
-        clip_vision_encoder_path, pretrained=clip_vision_encoder_pretrained
+        clip_vision_encoder_path, pretrained=clip_vision_encoder_pretrained,
+        cache_dir=clip_path,
     )
     # set the vision encoder to output the visual features
     vision_encoder.visual.output_tokens = True

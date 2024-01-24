@@ -679,6 +679,7 @@ def train_one_epoch_calvin(
 
                 checkpoint_dict = {
                     "epoch": epoch,
+                    "early_exit_layer": args.early_exit_layer,
                     "model_state_dict": get_checkpoint(model),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "lr_scheduler_state_dict": lr_scheduler.state_dict(),
