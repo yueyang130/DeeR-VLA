@@ -30,11 +30,11 @@ def get_autocast(precision):
         return suppress
     
 
-def get_ckpt_name(args, epoch=-1, early_exit_layer=-1):
+def get_ckpt_name(args, epoch=-1):
     if args.use_gripper:
-        ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', early_exit_layer)
+        ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     else:
-        ckpt_name = 'checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.hist_window, '' if not args.sep_resampler else 'sep_', early_exit_layer)
+        ckpt_name = 'checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     if args.real_data:
         ckpt_name += 'real_'
     if args.train_params != -1:
@@ -55,6 +55,11 @@ def get_ckpt_name(args, epoch=-1, early_exit_layer=-1):
         ckpt_name += 'fc_'
     if args.head_type == "diffusion":
         ckpt_name += 'diff_'
+    if args.head_type == "gaussian":
+        ckpt_name += 'gaussian_'
+        ckpt_name += f'bin_coef_{args.bin_coef}_'
+    if args.tanh_squash_dist:
+        ckpt_name += 'ts_'
     if args.traj_cons:
         ckpt_name += 'traj_cons_'
     if args.sep_lm_head:
@@ -96,9 +101,9 @@ def get_ckpt_name(args, epoch=-1, early_exit_layer=-1):
 
 def get_ckpt_name_pattern(args):
     if args.use_gripper:
-        ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_')
+        ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     else:
-        ckpt_name = 'checkpoint_no_gripper_hist_{}_{}'.format(args.hist_window, '' if not args.sep_resampler else 'sep_')
+        ckpt_name = 'checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     if args.real_data:
         ckpt_name += 'real_'
     if args.train_params != -1:
@@ -119,6 +124,11 @@ def get_ckpt_name_pattern(args):
         ckpt_name += 'fc_'
     if args.head_type == "diffusion":
         ckpt_name += 'diff_'
+    if args.head_type == "gaussian":
+        ckpt_name += 'gaussian_'
+        ckpt_name += f'bin_coef_{args.bin_coef}_'
+    if args.tanh_squash_dist:
+        ckpt_name += 'ts_'
     if args.traj_cons:
         ckpt_name += 'traj_cons_'
     if args.sep_lm_head:
@@ -552,14 +562,40 @@ def train_one_epoch_calvin(
         labels = [labels[..., :6], (labels[..., 6:] + 1) // 2]
 
         with autocast():
-            output = model(
-                vision_x=images,
-                lang_x=input_ids,
-                attention_mask=attention_mask,
-                # labels=labels,  # loss计算放在外面
-                vision_gripper=gripper,
-                state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None
-            )
+            if args.head_type == 'deterministic':
+                output = model(
+                    vision_x=images,
+                    lang_x=input_ids,
+                    attention_mask=attention_mask,
+                    # labels=labels,  # loss计算放在外面
+                    vision_gripper=gripper,
+                    state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None
+                )
+                num_actions, bin_actions = output.logits[0], output.logits[1]
+                if args.multi_step_action != 1:
+                    bs, seq_len = num_actions.shape[:2]
+                    num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                loss_mse = loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0])
+                loss_mle = torch.tensor([.0])
+                std = torch.tensor([.0])
+            elif args.head_type == 'gaussian':
+                output = model(
+                    vision_x=images,
+                    lang_x=input_ids,
+                    attention_mask=attention_mask,
+                    # labels=labels,  # loss计算放在外面
+                    vision_gripper=gripper,
+                    state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                    act=labels[0]
+                )
+                mean, log_prob, std, bin_actions = output.logits[:4]
+                loss_mse = torch.nn.functional.huber_loss(mean, labels[0])
+                if args.multi_step_action != 1:
+                    bs, seq_len = log_prob.shape[:2]
+                    log_prob = log_prob.reshape(bs, seq_len, args.multi_step_action, -1)
+                loss_mle = loss_calvin_num = - log_prob.mean()
+            else:
+                raise NotImplementedError(f'{args.head_type=}')
 
         # compute loss
         # if args.rank == 0:
@@ -573,20 +609,20 @@ def train_one_epoch_calvin(
             # print(output.logits[1].shape) # (bs, action_seq_len, 1)
             # print(labels[0].shape)
             # print(labels[1].shape)
-        num_actions, bin_actions = output.logits[0], output.logits[1]
 
         # reshape for loss calculation
         if args.multi_step_action != 1:
-            bs, seq_len = num_actions.shape[:2]
-            num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
             bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
 
-        loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0])
         loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
-        if args.real_data:
-            loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
-        else:
-            loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
+        
+        if args.head_type == 'deterministic':
+            if args.real_data:
+                loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
+            else:
+                loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
+        elif args.head_type == 'gaussian':
+            loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
 
         divided_loss_calvin = loss_calvin / args.gradient_accumulation_steps
 
@@ -638,24 +674,27 @@ def train_one_epoch_calvin(
                     / step_time_m.val
                 )
 
-                wandb.log(
-                    {
-                        "data_time": data_time_m.avg,
-                        "step_time": step_time_m.avg,
-                        "calvin_samples_per_second": calvin_samples_per_second,
-                        "calvin_samples_per_second_per_gpu": calvin_samples_per_second_per_gpu,
-                        "lr": optimizer.param_groups[0]["lr"],
-                    },
-                    commit=False,
-                )
+                # wandb.log(
+                #     {
+                #         "data_time": data_time_m.avg,
+                #         "step_time": step_time_m.avg,
+                #         "calvin_samples_per_second": calvin_samples_per_second,
+                #         "calvin_samples_per_second_per_gpu": calvin_samples_per_second_per_gpu,
+                #     },
+                #     commit=False,
+                # )
                 step_time_m.reset()
                 data_time_m.reset()
 
                 wandb.log(
                     {
+                         "lr": optimizer.param_groups[0]["lr"],
                         "loss_calvin": divided_loss_calvin.item(),
                         "loss_calvin_bin": loss_calvin_bin.item(),
                         "loss_calvin_num": loss_calvin_num.item(),
+                        "mse": loss_mse.item(),
+                        "mle": loss_mle.item(),
+                        "mean_std": std.mean().item(),
                         "global_step": global_step,
                     },
                     commit=True,
@@ -665,10 +704,10 @@ def train_one_epoch_calvin(
         # Log loss to console
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
             print(
-                f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss: (all){loss_calvin.item():.3f} (mse){loss_calvin_num.item():.3f} (bce){loss_calvin_bin.item():.3f}"
+                f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss: (all){loss_calvin.item():.3f} (mle) {loss_mle.item():.3f} (mse){loss_mse.item():.3f} (bce){loss_calvin_bin.item():.3f} (std) {std.mean().item():.3f}"
             )
         avg_horizon = min(100, len(mv_avg_loss))
-        t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, "loss": loss_calvin.item(), "Lnum": loss_calvin_num.item(), "Lbin": loss_calvin_bin.item()})
+        t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, "loss": loss_calvin.item(), "mle": loss_mle.item(), "mse": loss_mse.item(), "Lbin": loss_calvin_bin.item(), "std": std.mean().item()})
 
         if args.save_every_iter != -1 and global_step % args.save_every_iter == 0 and global_step > 0:
                 

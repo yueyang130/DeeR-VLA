@@ -109,6 +109,9 @@ def create_model_and_transforms(
     no_image_patch=False,
     global_latent=1,
     refresh=-1,
+    head_type='deterministic',
+    tanh_squash_dist=True, 
+    state_dependent_std=True,
     **flamingo_kwargs,
 ):
     """
@@ -224,6 +227,9 @@ def create_model_and_transforms(
         tcp_rel=tcp_rel,
         replan=replan,
         decoder_type=decoder_type,
+        head_type=head_type,
+        tanh_squash_dist=tanh_squash_dist, 
+        state_dependent_std=state_dependent_std,
         hidden_size=hidden_size,
         refresh=refresh,
         fwd_pred=fwd_pred,

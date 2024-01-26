@@ -26,8 +26,6 @@ from transformers import (
 
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
 
-os.environ['WANDB_MODE'] = 'offline'
-
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed + rank)
     np.random.seed(seed + rank)
@@ -167,7 +165,7 @@ def main():
     )
     parser.add_argument(
         "--fusion_mode",
-        default="pre",
+        default="pre", # pre / post / two way (use gripper view as extra input image)
         type=str,
         help="pre or post to fusion multi vision info",
     )
@@ -190,7 +188,6 @@ def main():
         action="store_true",
         help="whether diffusion model should predict epsilon",
     )
-    parser.add_argument('--head_type', type=str, default="lstm") # diffusion
     parser.add_argument(
         "--from_scratch",
         default=False,
@@ -312,8 +309,22 @@ def main():
     parser.add_argument("--multi_step_action", type=int, default=1, help="multiple step action prediction")
     
     parser.add_argument("--early_exit_layer", type=int, default=-1)
+    # For policy
+    # parser.add_argument('--head_type', type=str, default="lstm") # diffusion / gaussian
+    parser.add_argument('--head_type', type=str, default="deterministic")  # policy type: deterministic / gaussian / diffusion
+    parser.add_argument("--tanh_squash_dist", action="store_true", default=False)
+    parser.add_argument("--state_dependent_std", action="store_true", default=False)
+    parser.add_argument("--bin_coef", type=float, default=1.0)
 
     args = parser.parse_args()
+    
+    # print(f'{args.tanh_squash_dist=}')
+    if 'debug' in args.calvin_dataset:
+        os.environ['WANDB_MODE'] = 'online'
+    else:
+        # os.environ['WANDB_MODE'] = 'offline'
+        os.environ['WANDB_MODE'] = 'online'
+        
     
     if args.eval_hist_size == -1:
         args.eval_hist_size = args.window_size
@@ -356,6 +367,7 @@ def main():
         train_params=args.train_params,
         sep_resampler=args.sep_resampler,
         last_action=args.last_action,
+        head_type=args.head_type,
         use_diff=(args.head_type == "diffusion"), # Diff still have bugs of loaded data mismatch
         n_timesteps=args.n_timesteps,
         diff_horizon=args.diff_horizon,
@@ -375,6 +387,8 @@ def main():
         no_image_patch=args.no_image_patch,
         global_latent=args.global_latent,
         early_exit_layer=args.early_exit_layer,
+        tanh_squash_dist=args.tanh_squash_dist,
+        state_dependent_std=args.state_dependent_std,
     )
 
     checkpoint_path = args.openflamingo_checkpoint
@@ -516,6 +530,9 @@ def main():
     ddp_model.train()
     if args.real_data:
         resume_from_epoch = 0 
+    
+    # print(f'{get_ckpt_name(args, 0)}')
+    
     for epoch in range(resume_from_epoch, args.num_epochs):
         calvin_dataset.set_epoch(epoch)
         calvin_loader = calvin_dataset.dataloader
@@ -569,7 +586,7 @@ def main():
                 "lr_scheduler_state_dict": lr_scheduler.state_dict(),
             }
 
-            ckpt_name = get_ckpt_name(args, epoch, args.early_exit_layer)
+            ckpt_name = get_ckpt_name(args, epoch)
             ckpt_path = os.path.join(args.run_name, ckpt_name)
 
             print(f"Saving checkpoint to {ckpt_path}")

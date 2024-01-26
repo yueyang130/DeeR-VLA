@@ -190,7 +190,7 @@ def main():
         default="fp32",
         help="Floating point precision.",
     )
-    parser.add_argument('--head_type', type=str, default="lstm")  # diffusion
+    parser.add_argument('--head_type', type=str, default="deterministic")  # policy type: deterministic / gaussian / diffusion
     parser.add_argument(
         "--from_scratch",
         default=False,

@@ -13,14 +13,14 @@ parser.add_argument('--node_num', type=int)
 # Parse the arguments
 args = parser.parse_args()
 
-search_path = os.path.join(args.ckpt_dir,  '*.pth')
+search_path = os.path.join(args.ckpt_dir,  '*gaussian*.pth')
 ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
 # ckpt_names = ckpt_names[-1:]
-ckpt_names = [
-    'checkpoint_gripper_post_hist_1__exit_layer_-1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth3.pth',
-    'checkpoint_gripper_post_hist_1__exit_layer_-1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
-]
+# ckpt_names = [
+    # 'checkpoint_gripper_post_hist_1__exit_layer_-1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth3.pth',
+    # 'checkpoint_gripper_post_hist_1__exit_layer_-1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
+# ]
 
 print(ckpt_names)
 for ckpt_name in ckpt_names:
@@ -29,7 +29,7 @@ for ckpt_name in ckpt_names:
     ckpt_path = os.path.join(args.ckpt_dir, ckpt_name)
     log_dir = f'log_{args.ckpt_dir}'
     os.makedirs(log_dir, exist_ok=True)
-    log_file = '{}/evaluate_{}.log'.format(log_dir, ckpt_name.split('.')[0])
+    log_file = '{}/evaluate_{}.log'.format(log_dir, '.'.join(ckpt_name.split('.')[:-1]))
     if os.path.exists(log_file): 
         print(f'skip {ckpt_name}')
         continue

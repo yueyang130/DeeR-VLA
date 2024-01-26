@@ -3,7 +3,7 @@ from einops import rearrange, repeat
 from torch import nn
 import copy
 from open_flamingo.src.helpers import PerceiverResampler
-from robot_flamingo.models.action_head import DeterministicDecoder, DiffusionDecoder, FCDecoder, GPTDecoder
+from robot_flamingo.models.action_head import DeterministicDecoder, DiffusionDecoder, FCDecoder, GPTDecoder, GaussianDecoder
 from collections import namedtuple
 
 
@@ -41,6 +41,9 @@ class MPTFlamingo(nn.Module):
         tcp_rel=False,
         replan=-1,
         decoder_type='lstm',
+        head_type='deterministic',
+        tanh_squash_dist=True, 
+        state_dependent_std=True,
         hidden_size=None,
         fwd_pred=False,
         fwd_pred_hand=False,
@@ -125,8 +128,16 @@ class MPTFlamingo(nn.Module):
         self.use_diff = use_diff
         self.decoder_type = decoder_type
         if decoder_type == 'lstm':
-            lm_head = DeterministicDecoder(in_features, self.window_size, 
-            use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
+            print(f'{head_type=}')
+            if head_type == 'deterministic':
+                lm_head = DeterministicDecoder(in_features, self.window_size, 
+                    use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
+            elif head_type == 'gaussian':
+                lm_head = GaussianDecoder(in_features, self.window_size, 
+                    use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
+                    tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
+                print(f'{tanh_squash_dist=}, {state_dependent_std=}')
+                
             self.lang_encoder.lm_head = lm_head
         elif decoder_type == 'fc':
             if use_hist:
@@ -183,7 +194,8 @@ class MPTFlamingo(nn.Module):
         vision_gripper = None,
         state_tensor = None,
         return_feature = False,
-        policy_mask=None
+        policy_mask=None,
+        act=None,
     ):
         """
         Forward pass of Flamingo.
@@ -245,7 +257,10 @@ class MPTFlamingo(nn.Module):
         )
 
         output_hs = output.hidden_states[-1]
-        output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature)
+        if isinstance(self.lm_head, GaussianDecoder):
+            output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature, act=act)
+        else:
+            output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature)
         output.logits = output_hs
         
         return output
