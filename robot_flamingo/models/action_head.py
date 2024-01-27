@@ -69,8 +69,13 @@ class MLPSigmoidHead(torch.nn.Module):
             torch.nn.Sigmoid(),
         )
 
-    def forward(self, x):
-        return self.mlp(x)
+    def forward(self, x, with_logits=False):
+        for layer in self.mlp[:-1]:
+            x = layer(x)
+        if with_logits:
+            return self.mlp[-1](x), x # return
+        else:
+            return self.mlp[-1](x)
 
 class MLPActionHead(torch.nn.Module):
     def __init__(self, hidden_size):
@@ -315,7 +320,8 @@ class DeterministicDecoder(ActionDecoder):
         input_feature: torch.Tensor,
         h_0: Optional[torch.Tensor] = None,
         state_tensor=None,
-        return_feature=False
+        return_feature=False,
+        with_gripper_logits=False,
     ):
         
     
@@ -388,7 +394,7 @@ class DeterministicDecoder(ActionDecoder):
         if self.use_diff:
             return self.rnn_out
         actions = self.actions(x)
-        gripper = self.gripper(x)
+        gripper = self.gripper(x, with_logits=with_gripper_logits)
         if self.return_feature:
             return actions, gripper, org_feat
         else:
@@ -506,6 +512,7 @@ class GaussianDecoder(ActionDecoder):
         return_feature=False,
         deterministic=False, # set True when acting
         act=None, # for log prob and max-likelihood loss 
+        with_gripper_logits=False,
     ):
         assert deterministic ^ (act is not None)
         
@@ -580,7 +587,7 @@ class GaussianDecoder(ActionDecoder):
         
         mean = self.actions(x)
         log_std = self.std_network(x)
-        gripper = self.gripper(x)
+        gripper = self.gripper(x, with_logits=with_gripper_logits)
         
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
@@ -588,7 +595,7 @@ class GaussianDecoder(ActionDecoder):
         if self.tanh_squash_dist:
             # refer openai spinningup SAC implementation https://github.com/openai/spinningup/blob/038665d62d569055401d91856abb287263096178/spinup/algos/pytorch/sac/core.py#L38
             action_dist = torch.distributions.Normal(mean, std)
-            if deterministic:
+            if act is None:
                 pi_action = mean
             else:
                 # pi_action = action_dist.rsample()
@@ -603,7 +610,7 @@ class GaussianDecoder(ActionDecoder):
         else:
             mean = torch.tanh(mean)
             action_dist = torch.distributions.Normal(mean, std)
-            if deterministic:
+            if act is None:
                 pi_action = mean
             else:
                 # pi_action = action_dist.rsample()
@@ -613,19 +620,19 @@ class GaussianDecoder(ActionDecoder):
             logp_pi = action_dist.log_prob(pi_action).sum(axis=-1)
               
         if self.return_feature:
-            return mean, logp_pi, std, gripper, org_feat
+            return mean,  gripper, org_feat, logp_pi, std,
         else:
-            return mean, logp_pi, std, gripper
+            return mean,  gripper, logp_pi, std,
 
-    def act(
-        self,
-        input_feature: torch.Tensor,
-    ) -> torch.Tensor:
-        pred_actions, log_pi, std, self.hidden_state = self(
-            input_feature, self.hidden_state, deterministic=True,
-        )
+    # def act(
+    #     self,
+    #     input_feature: torch.Tensor,
+    # ) -> torch.Tensor:
+    #     pred_actions, log_pi, std, self.hidden_state = self(
+    #         input_feature, self.hidden_state, deterministic=True,
+    #     )
 
-        return pred_actions
+    #     return pred_actions
 
 
 class GPTDecoder(ActionDecoder):

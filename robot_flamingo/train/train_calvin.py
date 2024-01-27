@@ -97,12 +97,7 @@ def main():
     parser.add_argument("--weight_decay", default=0.1, type=float)
     # hot fix for torch.distributed.launch
     # parser.add_argument("--local-rank", type=int, default=1)
-    parser.add_argument(
-        "--precision",
-        choices=["amp_bf16", "amp_bfloat16", "bf16", "fp16", "fp32"],
-        default="fp32",
-        help="Floating point precision.",
-    )
+
     # data args
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--train_num_samples_calvin", type=int, default=100)
@@ -317,6 +312,12 @@ def main():
     parser.add_argument("--bin_coef", type=float, default=1.0)
     # for proxy task
     parser.add_argument("--data_percent", type=float, default=1.0)
+    parser.add_argument(
+        "--precision",
+        choices=["amp", "amp_bf16", "amp_bfloat16", "bf16", "fp16", "fp32"],
+        default="fp32",
+        help="Floating point precision.",
+    )
 
     args = parser.parse_args()
     
@@ -533,7 +534,7 @@ def main():
     if args.real_data:
         resume_from_epoch = 0 
     
-    # print(f'{get_ckpt_name(args, 0)}')
+    print(f'{get_ckpt_name(args, 0)}')
     
     for epoch in range(resume_from_epoch, args.num_epochs):
         calvin_dataset.set_epoch(epoch)

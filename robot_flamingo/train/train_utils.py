@@ -32,9 +32,9 @@ def get_autocast(precision):
 
 def get_ckpt_name(args, epoch=-1):
     if args.use_gripper:
-        ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+        ckpt_name = '{}_checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     else:
-        ckpt_name = 'checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+        ckpt_name = '{}_checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     if args.data_percent < 1.0:
         ckpt_name += f'data_{args.data_percent}_'
     if args.real_data:
@@ -103,9 +103,9 @@ def get_ckpt_name(args, epoch=-1):
 
 def get_ckpt_name_pattern(args):
     if args.use_gripper:
-        ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+        ckpt_name = '{}_checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     else:
-        ckpt_name = 'checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+        ckpt_name = '{}_checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     if args.data_percent < 1.0:
         ckpt_name += f'data_{args.data_percent}_'
     if args.real_data:
@@ -573,9 +573,11 @@ def train_one_epoch_calvin(
                     attention_mask=attention_mask,
                     # labels=labels,  # loss计算放在外面
                     vision_gripper=gripper,
-                    state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None
+                    state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                    with_gripper_logits=True,
                 )
-                num_actions, bin_actions = output.logits[0], output.logits[1]
+                num_actions, bin_gripper = output.logits[0], output.logits[1]
+                bin_actions, bin_logits = bin_gripper
                 if args.multi_step_action != 1:
                     bs, seq_len = num_actions.shape[:2]
                     num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
@@ -590,9 +592,11 @@ def train_one_epoch_calvin(
                     # labels=labels,  # loss计算放在外面
                     vision_gripper=gripper,
                     state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                    with_gripper_logits=True,
                     act=labels[0]
                 )
-                mean, log_prob, std, bin_actions = output.logits[:4]
+                mean,  bin_gripper, log_prob, std = output.logits[:4]
+                bin_actions, bin_logits = bin_gripper
                 loss_mse = torch.nn.functional.huber_loss(mean, labels[0])
                 if args.multi_step_action != 1:
                     bs, seq_len = log_prob.shape[:2]
@@ -617,23 +621,28 @@ def train_one_epoch_calvin(
         # reshape for loss calculation
         if args.multi_step_action != 1:
             bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
-
-        loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
+            bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
         
-        if args.head_type == 'deterministic':
-            if args.real_data:
-                loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
-            else:
-                loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
-        elif args.head_type == 'gaussian':
-            loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
+        # print(f'{bin_actions.shape=}, {bin_logits.shape=}')
 
-        divided_loss_calvin = loss_calvin / args.gradient_accumulation_steps
+        with autocast():
+            # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
+            loss_calvin_bin = torch.nn.functional.binary_cross_entropy_with_logits(bin_logits, labels[1])
+        
+            if args.head_type == 'deterministic':
+                if args.real_data:
+                    loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
+                else:
+                    loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
+            elif args.head_type == 'gaussian':
+                loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
 
-        #### BACKWARD PASS ####
-        loss = (
-            divided_loss_calvin * args.loss_multiplier_calvin
-        )
+            divided_loss_calvin = loss_calvin / args.gradient_accumulation_steps
+
+            #### BACKWARD PASS ####
+            loss = (
+                divided_loss_calvin * args.loss_multiplier_calvin
+            )
         mv_avg_loss.append(loss.item())
         loss.backward()
 
@@ -723,6 +732,7 @@ def train_one_epoch_calvin(
                 checkpoint_dict = {
                     "epoch": epoch,
                     "early_exit_layer": args.early_exit_layer,
+                    "precision": args.precision,
                     "model_state_dict": get_checkpoint(model),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "lr_scheduler_state_dict": lr_scheduler.state_dict(),

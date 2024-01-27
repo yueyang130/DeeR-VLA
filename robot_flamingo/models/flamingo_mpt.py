@@ -196,6 +196,8 @@ class MPTFlamingo(nn.Module):
         return_feature = False,
         policy_mask=None,
         act=None,
+        deterministic=False,
+        with_gripper_logits=False,
     ):
         """
         Forward pass of Flamingo.
@@ -258,9 +260,9 @@ class MPTFlamingo(nn.Module):
 
         output_hs = output.hidden_states[-1]
         if isinstance(self.lm_head, GaussianDecoder):
-            output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature, act=act)
+            output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature, with_gripper_logits=with_gripper_logits, act=act, deterministic=deterministic)
         else:
-            output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature)
+            output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature, with_gripper_logits=with_gripper_logits)
         output.logits = output_hs
         
         return output

@@ -371,10 +371,20 @@ def main():
     if args.rank == 0:
         print(f"Loading robot-flamingo checkpoint from {args.evaluate_from_checkpoint}")
     checkpoint = torch.load(args.evaluate_from_checkpoint, map_location="cpu")
-    if 'early_exit_layer' in checkpoint:
-        early_exit_layer = checkpoint['early_exit_layer']
-    else:
-        early_exit_layer = -1
+    
+    
+    def readout_args(args, ckpt, name, default):
+        if name in ckpt:
+            value = getattr(ckpt, name)
+            
+        else:
+            value = default
+        setattr(args, name, value)
+        print(f'set {name} to {value}!')
+        
+    readout_args(args, checkpoint, 'early_exit_layer', -1)
+    readout_args(args, checkpoint, "precision", 'fp32')
+    
     
     model, image_processor, tokenizer = create_model_and_transforms(
         args.vision_encoder_path,
@@ -412,7 +422,7 @@ def main():
         fwd_pred_hand=args.fwd_pred_hand,
         no_image_patch=args.no_image_patch,
         global_latent=args.global_latent,
-        early_exit_layer=early_exit_layer,
+        early_exit_layer=args.early_exit_layer,
         # refresh=args.refresh
     )
     checkpoint_path = args.openflamingo_checkpoint
