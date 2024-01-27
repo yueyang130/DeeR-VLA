@@ -13,7 +13,7 @@ parser.add_argument('--node_num', type=int)
 # Parse the arguments
 args = parser.parse_args()
 
-search_path = os.path.join(args.ckpt_dir,  '*gaussian*.pth')
+search_path = os.path.join(args.ckpt_dir,  r'*[0-9].pth')
 ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
 # ckpt_names = ckpt_names[-1:]

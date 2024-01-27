@@ -315,15 +315,17 @@ def main():
     parser.add_argument("--tanh_squash_dist", action="store_true", default=False)
     parser.add_argument("--state_dependent_std", action="store_true", default=False)
     parser.add_argument("--bin_coef", type=float, default=1.0)
+    # for proxy task
+    parser.add_argument("--data_percent", type=float, default=1.0)
 
     args = parser.parse_args()
     
     # print(f'{args.tanh_squash_dist=}')
-    if 'debug' in args.calvin_dataset:
-        os.environ['WANDB_MODE'] = 'online'
-    else:
-        # os.environ['WANDB_MODE'] = 'offline'
-        os.environ['WANDB_MODE'] = 'online'
+    # if 'debug' in args.calvin_dataset:
+    #     os.environ['WANDB_MODE'] = 'online'
+    # else:
+    #     # os.environ['WANDB_MODE'] = 'offline'
+    #     os.environ['WANDB_MODE'] = 'online'
         
     
     if args.eval_hist_size == -1:
@@ -581,6 +583,7 @@ def main():
             checkpoint_dict = {
                 "epoch": epoch,
                 "early_exit_layer": args.early_exit_layer,
+                "precision": args.precision,
                 "model_state_dict": get_checkpoint(ddp_model),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "lr_scheduler_state_dict": lr_scheduler.state_dict(),
@@ -595,14 +598,14 @@ def main():
                 if epoch > 0:
                     os.remove(ckpt_path)
 
-    if args.rank == 0:
-        if not os.path.exists(args.run_name):
-            os.makedirs(args.run_name)
+    # if args.rank == 0:
+    #     if not os.path.exists(args.run_name):
+    #         os.makedirs(args.run_name)
 
-        ckpt_name = get_ckpt_name(args,)
-        torch.save(get_checkpoint(ddp_model), f"{args.run_name}/{ckpt_name}")
-        if args.report_to_wandb and args.save_checkpoints_to_wandb:
-            wandb.save(f"{args.run_name}/{ckpt_name}")
+    #     ckpt_name = get_ckpt_name(args,)
+    #     torch.save(get_checkpoint(ddp_model), f"{args.run_name}/{ckpt_name}")
+    #     if args.report_to_wandb and args.save_checkpoints_to_wandb:
+    #         wandb.save(f"{args.run_name}/{ckpt_name}")
 
 
 if __name__ == "__main__":

@@ -35,6 +35,8 @@ def get_ckpt_name(args, epoch=-1):
         ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     else:
         ckpt_name = 'checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+    if args.data_percent < 1.0:
+        ckpt_name += f'data_{args.data_percent}_'
     if args.real_data:
         ckpt_name += 'real_'
     if args.train_params != -1:
@@ -104,6 +106,8 @@ def get_ckpt_name_pattern(args):
         ckpt_name = 'checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     else:
         ckpt_name = 'checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+    if args.data_percent < 1.0:
+        ckpt_name += f'data_{args.data_percent}_'
     if args.real_data:
         ckpt_name += 'real_'
     if args.train_params != -1:

@@ -234,7 +234,8 @@ class BaseCalvinDataset(Dataset):
         traj_cons=False,
         text_aug=False,
         dif_ws=False,
-        act_step=1
+        act_step=1,
+        data_percent=1.0,
     ):
         self.observation_space = obs_space
         self.proprio_state = proprio_state
@@ -269,6 +270,8 @@ class BaseCalvinDataset(Dataset):
         self.gripper_pad = gripper_pad
         if self.gripper_pad != -1:
             self.gripper_shift = RandomShiftsAug(gripper_pad)
+            
+        self.data_percent = data_percent
 
         assert (
             "validation" in self.abs_datasets_dir.as_posix()
@@ -277,6 +280,7 @@ class BaseCalvinDataset(Dataset):
         self.validation = "validation" in self.abs_datasets_dir.as_posix()
         assert self.abs_datasets_dir.is_dir()
         logger.info(f"loading dataset at {self.abs_datasets_dir}")
+        logger.info(f"use {data_percent*100:.1}% data in dataset")
         logger.info("finished loading dataset")
 
     def process_rgb(
@@ -440,7 +444,7 @@ class BaseCalvinDataset(Dataset):
         Returns:
             Size of the dataset.
         """
-        return len(self.episode_lookup)
+        return int(len(self.episode_lookup) * self.data_percent)
 
     def _get_pad_size(self, sequence: Dict) -> int:
         """
@@ -1079,12 +1083,14 @@ def get_calvin_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
         min_window_size=args.min_window_size,
         max_window_size=args.max_window_size,
         act_step=args.multi_step_action,
-        partial_data=args.partial_data
+        partial_data=args.partial_data,
+        data_percent=args.data_percent,
     )
 
     round_fn = math.floor if floor else math.ceil
 
     num_samples = len(calvin_dataset)
+    print('*'*20 + '\n' + f'{dataset_path} has {num_samples} training data\n' + '*'*20)
     global_batch_size = args.batch_size_calvin * args.world_size
     num_batches = round_fn(num_samples / global_batch_size)
     num_workers = max(1, args.workers)
