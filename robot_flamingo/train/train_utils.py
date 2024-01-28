@@ -9,6 +9,7 @@ from tqdm import tqdm
 from robot_flamingo.utils import world_to_tcp_frame, tcp_to_world_frame
 import itertools
 from einops import rearrange
+from torch.cuda.amp import GradScaler
 
 
 def get_cast_dtype(precision: str):
@@ -487,6 +488,8 @@ def train_one_epoch_calvin(
 
     autocast = get_autocast(args.precision)
     cast_dtype = get_cast_dtype(args.precision)
+    device_num = int(torch.distributed.get_world_size())
+    scaler = GradScaler(enabled='amp' in args.precision, growth_interval=int(1000/device_num))
 
     media_token_id = tokenizer("<image>", add_special_tokens=False)["input_ids"][-1]
     endofchunk_token_id = tokenizer("<|endofchunk|>", add_special_tokens=False)[
@@ -644,7 +647,11 @@ def train_one_epoch_calvin(
                 divided_loss_calvin * args.loss_multiplier_calvin
             )
         mv_avg_loss.append(loss.item())
-        loss.backward()
+        
+        if 'amp' in args.precision:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
         #### MASK GRADIENTS FOR EMBEDDINGS ####
         # Note (anas): Do not apply weight decay to embeddings as it will break this function.
@@ -659,13 +666,21 @@ def train_one_epoch_calvin(
 
         # model.apply(mask_embedding)
 
+        # unscale grad. Thus clip with original threshold
+        if 'amp' in args.precision:
+            scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
         # step optimizer and log
         if (((num_steps + 1) % args.gradient_accumulation_steps) == 0) or (
             num_steps == num_batches_per_epoch - 1
         ):
-            optimizer.step()
+            if 'amp' in args.precision:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+                
             lr_scheduler.step()
             optimizer.zero_grad()
 
@@ -709,6 +724,7 @@ def train_one_epoch_calvin(
                         "mle": loss_mle.item(),
                         "mean_std": std.mean().item(),
                         "global_step": global_step,
+                        "scale_factor": scaler.get_scale(),
                     },
                     commit=True,
                 )

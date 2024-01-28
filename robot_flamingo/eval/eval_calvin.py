@@ -375,7 +375,7 @@ def main():
     
     def readout_args(args, ckpt, name, default):
         if name in ckpt:
-            value = getattr(ckpt, name)
+            value = ckpt[name]
             
         else:
             value = default
