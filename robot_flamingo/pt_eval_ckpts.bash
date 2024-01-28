@@ -20,6 +20,7 @@ fusion_mode=$5
 window_size=$6
 node_num=$7
 single_step=$8
+amp=$9
 export MESA_GL_VERSION_OVERRIDE=4.1
 echo logging to ${log_file}
 
@@ -34,7 +35,7 @@ fi
 
 if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 1 ]
 then
-torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6066 robot_flamingo/eval/$script \
+torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6069 robot_flamingo/eval/$script \
     --precision fp32 \
     --use_gripper \
     --use_state \
@@ -45,12 +46,13 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6066 robot_flami
     --cross_attn_every_n_layers 4 \
     --evaluate_from_checkpoint ${evaluate_from_checkpoint} \
     --calvin_conf_path ${calvin_conf_path} \
+    --amp ${amp} \
     --workers 1 > ${log_file} 2>&1
 fi
 
 if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 0 ]
 then
-torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6021 robot_flamingo/eval/$script \
+torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6022 robot_flamingo/eval/$script \
     --precision fp32 \
     --use_gripper \
     --window_size ${window_size} \
@@ -60,12 +62,13 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6021 robot_flami
     --cross_attn_every_n_layers 4 \
     --evaluate_from_checkpoint ${evaluate_from_checkpoint} \
     --calvin_conf_path ${calvin_conf_path} \
+    --amp ${amp} \
     --workers 1 > ${log_file} 2>&1
 fi
 
 if [ ${use_gripper} -eq 0 ] && [ ${use_state} -eq 0 ]
 then
-torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6066 robot_flamingo/eval/$script \
+torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6069 robot_flamingo/eval/$script \
     --precision fp32 \
     --run_name RobotFlamingoDBG \
     --window_size ${window_size} \
@@ -74,5 +77,6 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=6066 robot_flami
     --cross_attn_every_n_layers 4 \
     --evaluate_from_checkpoint ${evaluate_from_checkpoint} \
     --calvin_conf_path ${calvin_conf_path} \
+    --amp ${amp} \
     --workers 1 > ${log_file} 2>&1
 fi

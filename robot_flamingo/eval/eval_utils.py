@@ -99,7 +99,7 @@ def make_env_debug(dataset_path):
 
 
 class ModelWrapper(CalvinBaseModel):
-    def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1):
+    def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1, amp=False):
         super().__init__()
         self.model = model
         self.replan = model.module.replan
@@ -112,6 +112,9 @@ class ModelWrapper(CalvinBaseModel):
         self.feature_cache = None
         self.dt_feat_cache = []
         self.fusion_mode = self.model.module.fusion_mode
+        self.amp = amp
+        if self.amp:
+            print("Enable AMP during inference!")
         
         if use_diff:
             self.diffusion_model = None
@@ -218,7 +221,7 @@ class ModelWrapper(CalvinBaseModel):
                 state = state.repeat(2, 1)
             state = state.unsqueeze(1).unsqueeze(1).to(dtype=self.cast_type)
             state = state.to(torch.float32)
-        with torch.no_grad():
+        with torch.no_grad(), torch.cuda.amp.autocast(enabled=self.amp):
             device = 'cuda'
             image_x = image_x.to(device)
             text_x = text_x.to(device)
@@ -575,7 +578,7 @@ def eval_one_epoch_calvin(args, model, dataset_path, image_processor, tokenizer,
 
     env = make_env(dataset_path)
     cast_dtype = get_cast_dtype(args.precision)
-    wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=args.n_obs_steps, future_act_len=future_act_len)
+    wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=args.n_obs_steps, future_act_len=future_act_len, amp=args.amp)
     evaluate_policy(wrapped_model, env, 0, args.calvin_conf_path)
 
 
@@ -588,7 +591,7 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
         hist_len = args.n_obs_steps
     elif args.pad_length != -1:
         hist_len = args.pad_length
-    wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len)
+    wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp)
     evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
 
 

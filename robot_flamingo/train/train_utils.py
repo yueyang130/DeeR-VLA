@@ -489,7 +489,7 @@ def train_one_epoch_calvin(
     autocast = get_autocast(args.precision)
     cast_dtype = get_cast_dtype(args.precision)
     device_num = int(torch.distributed.get_world_size())
-    scaler = GradScaler(enabled='amp' in args.precision, growth_interval=int(1000/device_num))
+    scaler = GradScaler(enabled='amp' in args.precision, growth_interval=int(4000/device_num))
 
     media_token_id = tokenizer("<image>", add_special_tokens=False)["input_ids"][-1]
     endofchunk_token_id = tokenizer("<|endofchunk|>", add_special_tokens=False)[

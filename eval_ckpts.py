@@ -9,6 +9,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--ckpt_dir', type=str, help='The checkpoint directory')
 parser.add_argument('--single_step', action='store_true', help='If set, evlauate in single step mode')
 parser.add_argument('--node_num', type=int)
+parser.add_argument(
+        "--amp",
+        default=False,
+        action="store_true"
+    )
 
 # Parse the arguments
 args = parser.parse_args()
@@ -31,7 +36,10 @@ for ckpt_name in ckpt_names:
     ckpt_path = os.path.join(args.ckpt_dir, ckpt_name)
     log_dir = f'log_{args.ckpt_dir}'
     os.makedirs(log_dir, exist_ok=True)
-    log_file = '{}/evaluate_{}.log'.format(log_dir, '.'.join(ckpt_name.split('.')[:-1]))
+    if args.amp:
+        log_file = '{}/amp_evaluate_{}.log'.format(log_dir, '.'.join(ckpt_name.split('.')[:-1]))
+    else:
+        log_file = '{}/evaluate_{}.log'.format(log_dir, '.'.join(ckpt_name.split('.')[:-1]))
     if os.path.exists(log_file): 
         print(f'skip {ckpt_name}')
         continue
@@ -48,5 +56,5 @@ for ckpt_name in ckpt_names:
         window_size = int(ckpt_attrs[ckpt_attrs.index('ws')+1])
     # print('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state))
     # exit(0)
-    os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state, fusion_mode, window_size, args.node_num, args.single_step))
+    os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp))
 

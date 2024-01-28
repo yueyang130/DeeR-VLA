@@ -300,9 +300,17 @@ def main():
     parser.add_argument("--llm_name", type=str, default='llama_9b')
     parser.add_argument("--pooling", type=str, default='max')
     parser.add_argument("--multi_step_action", type=int, default=1, help="multiple step action prediction")
+    
+    parser.add_argument(
+        "--amp",
+        default=False,
+        type=bool, help="enable amp during inference",
+    )
 
 
     args = parser.parse_args()
+    
+    print(f'{args.amp=}')
     
     if args.head_type == "diffusion":
         args.pad_length = args.n_obs_steps
