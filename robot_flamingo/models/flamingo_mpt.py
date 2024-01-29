@@ -51,6 +51,8 @@ class MPTFlamingo(nn.Module):
         no_image_patch=False,
         refresh=-1,
         early_exit_layer=-1,
+        multi_exit=False,
+        exit_interval=1,
     ):
         """
         Args:
@@ -126,7 +128,9 @@ class MPTFlamingo(nn.Module):
         else:
             in_features = self.lang_dim
         self.use_diff = use_diff
+        
         self.decoder_type = decoder_type
+        self.head_type = head_type
         if decoder_type == 'lstm':
             print(f'{head_type=}')
             if head_type == 'deterministic':
@@ -136,7 +140,7 @@ class MPTFlamingo(nn.Module):
                 lm_head = GaussianDecoder(in_features, self.window_size, 
                     use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
                     tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
-                print(f'{tanh_squash_dist=}, {state_dependent_std=}')
+                print(f'Use guassian policy! {tanh_squash_dist=}, {state_dependent_std=}')
                 
             self.lang_encoder.lm_head = lm_head
         elif decoder_type == 'fc':
@@ -180,6 +184,52 @@ class MPTFlamingo(nn.Module):
         self.early_exit_layer = early_exit_layer
 
         self.lang_encoder._delete_decoder_layers(list(range(early_exit_layer+1, lang_encoder.config.n_layers)))
+
+        # multi-exit
+        self.lm_exits = {}
+        if multi_exit:
+            print("Enable multi-exit!")
+            
+            def get_encoder():
+                if decoder_type == 'lstm':
+                    if head_type == 'deterministic':
+                        lm_head = DeterministicDecoder(in_features, self.window_size, 
+                            use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
+                    elif head_type == 'gaussian':
+                        lm_head = GaussianDecoder(in_features, self.window_size, 
+                            use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
+                            tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
+                elif decoder_type == 'fc':
+                    if use_hist:
+                        lm_head = FCDecoder(in_features, self.window_size, 
+                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action)
+                    elif 'vit_concat' in fusion_mode:
+                        lm_head = FCDecoder(in_features, self.window_size, 
+                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action)
+                    else:
+                        raise NotImplementedError
+                elif decoder_type == 'diffusion':
+                    if use_diff:
+                        lm_head = DiffusionDecoder(
+                            self.action_head.hidden_size, 
+                            self.window_size,
+                            input_dim=self.action_head.out_features+1,
+                            n_timesteps=n_timesteps,
+                            horizon=diff_horizon,
+                            predict_epsilon=predict_epsilon,
+                        )
+                    else:
+                        raise NotImplementedError
+                elif decoder_type=='gpt':
+                    lm_head = GPTDecoder(in_features, self.window_size, use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, multi_step_action=multi_step_action, pooling=pooling, hidden_size=hidden_size)
+                else:
+                    raise NotImplementedError
+                return lm_head
+                
+            for i in range(0, early_exit_layer, exit_interval):
+                self.lm_exits[i] = get_encoder()
+            self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
+            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one infal exit!')         
 
     def forward(
         self,
@@ -258,13 +308,30 @@ class MPTFlamingo(nn.Module):
             output_hidden_states=True
         )
 
-        output_hs = output.hidden_states[-1]
-        if isinstance(self.lm_head, GaussianDecoder):
-            output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature, with_gripper_logits=with_gripper_logits, act=act, deterministic=deterministic)
-        else:
-            output_hs = self.lm_head(output_hs, state_tensor=state_tensor, return_feature=return_feature, with_gripper_logits=with_gripper_logits)
-        output.logits = output_hs
         
+        assert state_tensor is None or not self.use_state, "please implement state_tensor input for multi-exit net! After that, remove this line."
+        
+        
+        def get_action(head, in_feat, in_state):
+            if isinstance(head, GaussianDecoder):
+                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, with_gripper_logits=with_gripper_logits, act=act, deterministic=deterministic)
+            else:
+                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, with_gripper_logits=with_gripper_logits)
+            return o
+        
+        last_feat = output.hidden_states[-1]
+        last_action_output = get_action(self.lm_head, last_feat, state_tensor)
+        output.logits = last_action_output
+        
+        if len(self.lm_exits) > 0:
+            exit_outputs = []
+            for exit_layer, exit_head in self.lm_exits.items():
+                internal_feat = output.hidden_states[exit_layer]
+                exit_action_output = get_action(exit_head, internal_feat, None)
+                exit_outputs.append(exit_action_output)
+            return output, exit_outputs
+                
+
         return output
 
     def _encode_vision_x(self, vision_x: torch.Tensor):

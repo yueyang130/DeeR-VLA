@@ -54,6 +54,21 @@ def get_cast_dtype(precision: str):
         cast_dtype = torch.float16
     return cast_dtype
 
+def check_loaded_parameters(model, checkpoint):
+    model_keys = set(model.state_dict().keys())
+    checkpoint_keys = set(checkpoint.keys())
+
+    # Check if there are keys in the checkpoint that are not in the model
+    extra_keys = checkpoint_keys - model_keys
+    if extra_keys:
+        raise KeyError(f'{len(extra_keys)} keys in the checkpoint were not found in the model: {extra_keys}')
+
+    # Check if there are keys in the model that are not in the checkpoint
+    missing_keys = model_keys - checkpoint_keys
+    if missing_keys and torch.distributed.get_rank() == 0:
+        print(f'Warning: {len(missing_keys)} keys in the model were not found in the checkpoint: {missing_keys}')
+
+
 
 def make_env(dataset_path):
     val_folder = Path(dataset_path) / "validation"
@@ -113,6 +128,7 @@ class ModelWrapper(CalvinBaseModel):
         self.dt_feat_cache = []
         self.fusion_mode = self.model.module.fusion_mode
         self.amp = amp
+        self.head_type = model.module.head_type
         if self.amp:
             print("Enable AMP during inference!")
         
@@ -315,7 +331,7 @@ class ModelWrapper(CalvinBaseModel):
                     mask = mask.repeat(2, 1)
                     action = self.model(vision_x=vision_x, lang_x=text_x, attention_mask=mask, state_tensor = state, return_feature=True)
                 else:
-                    action = self.model(vision_x=image_x, lang_x=text_x, attention_mask=mask, vision_gripper = gripper, state_tensor = state, return_feature=True)
+                    action = self.model(vision_x=image_x, lang_x=text_x, attention_mask=mask, vision_gripper = gripper, state_tensor = state, return_feature=True, deterministic=True)
                 
                 if self.model.module.pad_length != -1:
                     if self.feature_cache is None:

@@ -271,6 +271,8 @@ def create_model_and_transforms(
         model.diffusion_model.requires_grad_(True)
     if unfreeze_vit:
         model.vision_encoder.requires_grad_(True)
+    if len(model.lm_exits) > 0:
+        model.lm_exit_modules.requires_grad_(True)
     # # Unfreeze the action head 
     # model.action_head.requires_grad_(True)
 

@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from train_utils import get_checkpoint, train_one_epoch_calvin, train_one_epoch_calvin_diff, train_one_epoch_calvin_cotrain, train_one_epoch_calvin_two_way, \
-get_ckpt_name, get_ckpt_name_pattern
+train_one_epoch_calvin_multi_exit, get_ckpt_name, get_ckpt_name_pattern, save_ckpt
 from torch.distributed.elastic.multiprocessing.errors import record
 from transformers import (
     get_constant_schedule_with_warmup,
@@ -303,7 +303,6 @@ def main():
     parser.add_argument("--pooling", type=str, default='max')
     parser.add_argument("--multi_step_action", type=int, default=1, help="multiple step action prediction")
     
-    parser.add_argument("--early_exit_layer", type=int, default=-1)
     # For policy
     # parser.add_argument('--head_type', type=str, default="lstm") # diffusion / gaussian
     parser.add_argument('--head_type', type=str, default="deterministic")  # policy type: deterministic / gaussian / diffusion
@@ -318,6 +317,11 @@ def main():
         default="fp32",
         help="Floating point precision.",
     )
+    # for dynamic network
+    parser.add_argument("--early_exit_layer", type=int, default=-1, help='remove all layers after it') 
+    parser.add_argument("--multi_exit", action="store_true", default=False)
+    parser.add_argument("--exit_interval", type=int, default=1, help='intervals between exits')
+    parser.add_argument("--exit_weight", type=str, default='uniform', help='uniform/ascending/descending')
 
     args = parser.parse_args()
     
@@ -370,7 +374,6 @@ def main():
         train_params=args.train_params,
         sep_resampler=args.sep_resampler,
         last_action=args.last_action,
-        head_type=args.head_type,
         use_diff=(args.head_type == "diffusion"), # Diff still have bugs of loaded data mismatch
         n_timesteps=args.n_timesteps,
         diff_horizon=args.diff_horizon,
@@ -389,9 +392,13 @@ def main():
         fwd_pred_hand=args.fwd_pred_hand,
         no_image_patch=args.no_image_patch,
         global_latent=args.global_latent,
-        early_exit_layer=args.early_exit_layer,
+        head_type=args.head_type,
         tanh_squash_dist=args.tanh_squash_dist,
         state_dependent_std=args.state_dependent_std,
+        early_exit_layer=args.early_exit_layer,
+        multi_exit=args.multi_exit,
+        exit_interval=args.exit_interval,
+        
     )
 
     checkpoint_path = args.openflamingo_checkpoint
@@ -565,39 +572,33 @@ def main():
                 wandb=wandb,
             )
         else:
-            train_one_epoch_calvin(
-                args=args,
-                model=ddp_model,
-                epoch=epoch,
-                tokenizer=tokenizer,
-                optimizer=optimizer,
-                lr_scheduler=lr_scheduler,
-                calvin_loader=calvin_loader,
-                device_id=device_id,
-                wandb=wandb,
-            )
+            if args.multi_exit:
+                train_one_epoch_calvin_multi_exit(
+                    args=args,
+                    model=ddp_model,
+                    epoch=epoch,
+                    tokenizer=tokenizer,
+                    optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
+                    calvin_loader=calvin_loader,
+                    device_id=device_id,
+                    wandb=wandb,
+                )
+            else:
+                train_one_epoch_calvin(
+                    args=args,
+                    model=ddp_model,
+                    epoch=epoch,
+                    tokenizer=tokenizer,
+                    optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
+                    calvin_loader=calvin_loader,
+                    device_id=device_id,
+                    wandb=wandb,
+                )
 
         if args.rank == 0 and epoch % args.save_freq == 0:
-            if not os.path.exists(args.run_name):
-                os.makedirs(args.run_name)
-
-            checkpoint_dict = {
-                "epoch": epoch,
-                "early_exit_layer": args.early_exit_layer,
-                "precision": args.precision,
-                "model_state_dict": get_checkpoint(ddp_model),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "lr_scheduler_state_dict": lr_scheduler.state_dict(),
-            }
-
-            ckpt_name = get_ckpt_name(args, epoch)
-            ckpt_path = os.path.join(args.run_name, ckpt_name)
-
-            print(f"Saving checkpoint to {ckpt_path}")
-            torch.save(checkpoint_dict, ckpt_path)
-            if args.delete_previous_checkpoint:
-                if epoch > 0:
-                    os.remove(ckpt_path)
+            save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, epoch)
 
     # if args.rank == 0:
     #     if not os.path.exists(args.run_name):

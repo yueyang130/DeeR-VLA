@@ -18,7 +18,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
-from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp
+from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp, check_loaded_parameters
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
 
 
@@ -307,7 +307,6 @@ def main():
         type=bool, help="enable amp during inference",
     )
 
-
     args = parser.parse_args()
     
     print(f'{args.amp=}')
@@ -390,9 +389,13 @@ def main():
         setattr(args, name, value)
         print(f'set {name} to {value}!')
         
+    readout_args(args, checkpoint, 'head_type', 'derterministic')
+    readout_args(args, checkpoint, 'tanh_squash_dist', False)
+    readout_args(args, checkpoint, 'state_dependent_std', False)
     readout_args(args, checkpoint, 'early_exit_layer', -1)
     readout_args(args, checkpoint, "precision", 'fp32')
-    
+    readout_args(args, checkpoint, "multi_exit", False)
+    readout_args(args, checkpoint, "exit_interval", 1)
     
     model, image_processor, tokenizer = create_model_and_transforms(
         args.vision_encoder_path,
@@ -430,8 +433,13 @@ def main():
         fwd_pred_hand=args.fwd_pred_hand,
         no_image_patch=args.no_image_patch,
         global_latent=args.global_latent,
-        early_exit_layer=args.early_exit_layer,
         # refresh=args.refresh
+        head_type=args.head_type,
+        tanh_squash_dist=args.tanh_squash_dist,
+        state_dependent_std=args.state_dependent_std,
+        early_exit_layer=args.early_exit_layer,
+        multi_exit=args.multi_exit,
+        exit_interval=args.exit_interval,
     )
     checkpoint_path = args.openflamingo_checkpoint
     print("Loading origin flamingo checkpoint from ", checkpoint_path)
@@ -465,9 +473,11 @@ def main():
         model.lang_encoder.clone_parameters()
 
     try:
-        ddp_model.load_state_dict(checkpoint["model_state_dict"], False)  # 只保存了求梯度的部分
+        ckpt_dict = checkpoint["model_state_dict"]
     except:
-        ddp_model.load_state_dict(checkpoint, False)  # 只保存了求梯度的部分
+        ckpt_dict = checkpoint  
+    ddp_model.load_state_dict(ckpt_dict, False)  # 只保存了求梯度的部分
+    check_loaded_parameters(ddp_model, ckpt_dict)
 
     ddp_model.eval()
     eval_log_dir = None

@@ -22,12 +22,13 @@ search_path = os.path.join(args.ckpt_dir,  r'*[0-9].pth')
 ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
 # ckpt_names = ckpt_names[-1:]
-# ckpt_names = [
-#     'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_traj_cons_ws_12_mpt_dolly_3b_9.pth9.pth',
-#     'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
-#     'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_ts_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
-#     'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_traj_cons_ws_12_mpt_dolly_3b_1.pth1.pth',
-# ]
+ckpt_names = [
+    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_traj_cons_ws_12_mpt_dolly_3b_9.pth9.pth',
+    'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_traj_cons_ws_12_mpt_dolly_3b_8-v2.pth',
+    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
+    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_ts_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
+    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_traj_cons_ws_12_mpt_dolly_3b_1.pth1.pth',
+]
 
 print(ckpt_names)
 for ckpt_name in ckpt_names:
