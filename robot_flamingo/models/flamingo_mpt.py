@@ -229,7 +229,23 @@ class MPTFlamingo(nn.Module):
             for i in range(0, early_exit_layer, exit_interval):
                 self.lm_exits[i] = get_encoder()
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
-            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one infal exit!')         
+            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one infal exit!')      
+
+    def get_all_exit_idx(self):
+        return list(self.lm_exits.keys()) + [self.lang_encoder.config.n_layers - 1]
+    
+    def set_all_exit_window_size(self, new_window_size):
+        if self.sep_lm_head:
+            window_size = self.lm_head.window_size
+            self.lm_head.window_size = new_window_size
+        else:
+            window_size = self.lang_encoder.lm_head.window_size
+            self.lang_encoder.lm_head.window_size = new_window_size
+        
+        if len(self.lm_exits) > 0:
+            for exit in self.lm_exit_modules:
+                exit.window_size = new_window_size
+        return window_size
 
     def forward(
         self,
@@ -248,6 +264,8 @@ class MPTFlamingo(nn.Module):
         act=None,
         deterministic=False,
         with_gripper_logits=False,
+        exit_id=None,
+        dynamic_early_exit=False,
     ):
         """
         Forward pass of Flamingo.
@@ -300,17 +318,17 @@ class MPTFlamingo(nn.Module):
                     elif self.fusion_mode == 'vit_concat':
                         self._encode_history_vision_fc_post(vision_x, vision_gripper)
         
+        if dynamic_early_exit == True:
+            raise NotImplementedError
+        
         output = self.lang_encoder(
             input_ids=lang_x,
             attention_mask=attention_mask.bool(),
             past_key_values=past_key_values,
             use_cache=use_cache,
-            output_hidden_states=True
+            output_hidden_states=True,
+            exit_id=exit_id,
         )
-
-        
-        assert state_tensor is None or not self.use_state, "please implement state_tensor input for multi-exit net! After that, remove this line."
-        
         
         def get_action(head, in_feat, in_state):
             if isinstance(head, GaussianDecoder):
@@ -319,6 +337,24 @@ class MPTFlamingo(nn.Module):
                 o = head(in_feat, state_tensor=in_state, return_feature=return_feature, with_gripper_logits=with_gripper_logits)
             return o
         
+        # inference: only output one specified exit
+        if exit_id is not None: 
+            if exit_id < 0:
+                exit_id += self.lang_encoder.config.n_layers
+            assert 0 <= exit_id < self.lang_encoder.config.n_layers
+            if exit_id == self.lang_encoder.config.n_layers - 1:
+                exit_head = self.lm_head
+            else:
+                exit_head = self.lm_exits[exit_id]
+            assert len(output.hidden_states) == exit_id + 1
+            exit_action_output = get_action(exit_head, output.hidden_states[exit_id], state_tensor)
+            output.logits = exit_action_output
+            return output
+        
+        if dynamic_early_exit:
+            raise NotImplementedError
+        
+        # training: output all exits
         last_feat = output.hidden_states[-1]
         last_action_output = get_action(self.lm_head, last_feat, state_tensor)
         output.logits = last_action_output
@@ -327,7 +363,7 @@ class MPTFlamingo(nn.Module):
             exit_outputs = []
             for exit_layer, exit_head in self.lm_exits.items():
                 internal_feat = output.hidden_states[exit_layer]
-                exit_action_output = get_action(exit_head, internal_feat, None)
+                exit_action_output = get_action(exit_head, internal_feat, state_tensor)
                 exit_outputs.append(exit_action_output)
             return output, exit_outputs
                 

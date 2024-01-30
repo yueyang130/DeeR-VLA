@@ -14,6 +14,7 @@ parser.add_argument(
         default=False,
         action="store_true"
     )
+parser.add_argument("--eval_exit_mode", type=str, default='last', choices=['last', 'all', 'dynamic']) # only eval the last exit / all exits / dynamic early-exit mechanism
 
 # Parse the arguments
 args = parser.parse_args()
@@ -21,14 +22,10 @@ args = parser.parse_args()
 search_path = os.path.join(args.ckpt_dir,  r'*[0-9].pth')
 ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
-# ckpt_names = ckpt_names[-1:]
-ckpt_names = [
-    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_traj_cons_ws_12_mpt_dolly_3b_9.pth9.pth',
-    'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_traj_cons_ws_12_mpt_dolly_3b_8-v2.pth',
-    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
-    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_bin_coef_1.0_ts_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
-    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_gaussian_traj_cons_ws_12_mpt_dolly_3b_1.pth1.pth',
-]
+ckpt_names = ckpt_names[-1:]
+# ckpt_names = [
+#     'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth'
+# ]
 
 print(ckpt_names)
 for ckpt_name in ckpt_names:
@@ -37,10 +34,12 @@ for ckpt_name in ckpt_names:
     ckpt_path = os.path.join(args.ckpt_dir, ckpt_name)
     log_dir = f'log_{args.ckpt_dir}'
     os.makedirs(log_dir, exist_ok=True)
+    prefix = 'evaluate'
     if args.amp:
-        log_file = '{}/amp_evaluate_{}.log'.format(log_dir, '.'.join(ckpt_name.split('.')[:-1]))
-    else:
-        log_file = '{}/evaluate_{}.log'.format(log_dir, '.'.join(ckpt_name.split('.')[:-1]))
+        prefix += '_amp'
+    prefix += f'_{args.eval_exit_mode}_exit'
+        
+    log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
     if os.path.exists(log_file): 
         print(f'skip {ckpt_name}')
         continue
@@ -57,5 +56,5 @@ for ckpt_name in ckpt_names:
         window_size = int(ckpt_attrs[ckpt_attrs.index('ws')+1])
     # print('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state))
     # exit(0)
-    os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp))
+    os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode))
 

@@ -104,7 +104,8 @@ class FlamingoLMMixin(nn.Module):
         for i in indices:
             del layers[i]
             del self.gated_cross_attn_layers[i]
-            del self.old_decoder_blocks[i]
+            del self.old_decoder_blocks[i] # original language self-attention layers
+        self.config.n_layers = len(self._get_decoder_layers())
         print(f'Now the number of layer is {len(self._get_decoder_layers())}')
 
     def init_flamingo(
@@ -199,3 +200,4 @@ class FlamingoLMMixin(nn.Module):
             layer.condition_vis_x(None)
             layer.condition_media_locations(None)
             layer.condition_use_cached_media(None)
+            

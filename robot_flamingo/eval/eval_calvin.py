@@ -306,10 +306,14 @@ def main():
         default=False,
         type=bool, help="enable amp during inference",
     )
-
+    
+    # multi-exit eval
+    parser.add_argument("--eval_exit_mode", type=str, default='last') # only eval the last exit / all exits / early-exit mechanism
+    
     args = parser.parse_args()
     
     print(f'{args.amp=}')
+    print(f'{args.eval_exit_mode=}')
     
     if args.head_type == "diffusion":
         args.pad_length = args.n_obs_steps
@@ -389,7 +393,7 @@ def main():
         setattr(args, name, value)
         print(f'set {name} to {value}!')
         
-    readout_args(args, checkpoint, 'head_type', 'derterministic')
+    readout_args(args, checkpoint, 'head_type', 'deterministic')
     readout_args(args, checkpoint, 'tanh_squash_dist', False)
     readout_args(args, checkpoint, 'state_dependent_std', False)
     readout_args(args, checkpoint, 'early_exit_layer', -1)

@@ -38,3 +38,5 @@ lang_simi*
 *plot.py
 void.py
 test*.py
+*.safetensors
+lm_src

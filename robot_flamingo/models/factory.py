@@ -159,6 +159,7 @@ def create_model_and_transforms(
         lang_encoder = AutoModelForCausalLM.from_pretrained(
             lang_encoder_path, local_files_only=use_local_files, trust_remote_code=True
         )
+
         # print(lang_encoder_path)
         # if llm_name == 'llama':
         #     lang_encoder = AutoModelForCausalLM.from_pretrained(

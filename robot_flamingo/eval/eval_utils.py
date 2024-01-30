@@ -46,6 +46,9 @@ EP_LEN = 360
 # NUM_SEQUENCES = 1000
 NUM_SEQUENCES = 56
 
+# EP_LEN = 100
+# NUM_SEQUENCES = 5
+
 def get_cast_dtype(precision: str):
     cast_dtype = None
     if precision == "bf16" or precision == "amp_bf16":
@@ -64,9 +67,9 @@ def check_loaded_parameters(model, checkpoint):
         raise KeyError(f'{len(extra_keys)} keys in the checkpoint were not found in the model: {extra_keys}')
 
     # Check if there are keys in the model that are not in the checkpoint
-    missing_keys = model_keys - checkpoint_keys
-    if missing_keys and torch.distributed.get_rank() == 0:
-        print(f'Warning: {len(missing_keys)} keys in the model were not found in the checkpoint: {missing_keys}')
+    # missing_keys = model_keys - checkpoint_keys
+    # if missing_keys and torch.distributed.get_rank() == 0:
+    #     print(f'Warning: {len(missing_keys)} keys in the model were not found in the checkpoint: {missing_keys}')
 
 
 
@@ -114,7 +117,7 @@ def make_env_debug(dataset_path):
 
 
 class ModelWrapper(CalvinBaseModel):
-    def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1, amp=False):
+    def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1, amp=False, exit_id=None, early_exit=False):
         super().__init__()
         self.model = model
         self.replan = model.module.replan
@@ -131,6 +134,8 @@ class ModelWrapper(CalvinBaseModel):
         self.head_type = model.module.head_type
         if self.amp:
             print("Enable AMP during inference!")
+        self.exit_id = exit_id
+        self.dynamic_early_exit = early_exit
         
         if use_diff:
             self.diffusion_model = None
@@ -188,7 +193,7 @@ class ModelWrapper(CalvinBaseModel):
             self.model.module.lm_head.hidden_state = None
             self.model.module.lm_head.history_memory = []
 
-    def step(self, obs, goal, get_action=True):
+    def step(self, obs, goal, get_action=True,):
         """
         Args:
             obs: environment observations
@@ -206,17 +211,15 @@ class ModelWrapper(CalvinBaseModel):
         # expand text dimension
         text_x, mask = self.text_process_fn([goal])
 
+        assert self.model.module.pad_length == -1, "Padding for multi-exit net is not implemented. It requires store feature_cache for each exit separately."
         # fix window_size : ddp_model -> ... -> window_size
-        if self.model.module.sep_lm_head:
-            window_size = self.model.module.lm_head.window_size
-            self.model.module.lm_head.window_size = 1
-            if self.model.module.pad_length != -1 and self.feature_cache is None:
-                self.model.module.lm_head.window_size = self.model.module.pad_length
+        # Inference: set lstm window_size = 1 and use hidden_state_memory
+        # training: set window_size = 12 and set hidden_state = None and calculate it from scratch
+        if self.model.module.pad_length != -1 and self.feature_cache is None:
+            window_size = self.model.module.set_all_exit_window_size(self.model.module.pad_length)
         else:
-            window_size = self.model.module.lang_encoder.lm_head.window_size
-            self.model.module.lang_encoder.lm_head.window_size = 1
-            if self.model.module.pad_length != -1 and self.feature_cache is None:
-                self.model.module.lang_encoder.lm_head.window_size = self.model.module.pad_length
+            window_size = self.model.module.set_all_exit_window_size(1)
+
         gripper = None
         state = None
 
@@ -331,22 +334,23 @@ class ModelWrapper(CalvinBaseModel):
                     mask = mask.repeat(2, 1)
                     action = self.model(vision_x=vision_x, lang_x=text_x, attention_mask=mask, state_tensor = state, return_feature=True)
                 else:
-                    action = self.model(vision_x=image_x, lang_x=text_x, attention_mask=mask, vision_gripper = gripper, state_tensor = state, return_feature=True, deterministic=True)
+                    action = self.model(vision_x=image_x, lang_x=text_x, attention_mask=mask, vision_gripper = gripper, state_tensor = state, return_feature=True, 
+                                        deterministic=True, exit_id=self.exit_id, dynamic_early_exit=self.dynamic_early_exit)
                 
-                if self.model.module.pad_length != -1:
-                    if self.feature_cache is None:
-                        self.feature_cache = action.logits[-1]
-                    else:
-                        new_feat = torch.cat([self.feature_cache[1:], action.logits[-1]], dim=0)
-                        self.feature_cache = new_feat
-                        if not self.model.module.sep_lm_head:
-                            self.model.module.lang_encoder.lm_head.window_size = window_size
-                            lm_out = self.model.module.lang_encoder.lm_head(new_feat)
-                        else:
-                            self.model.module.lm_head.window_size = window_size
-                            lm_out = self.model.module.lm_head(new_feat)
-                        Output = namedtuple('Output', ['logits'])
-                        action = Output(lm_out)
+                # if self.model.module.pad_length != -1:
+                #     if self.feature_cache is None:
+                #         self.feature_cache = action.logits[-1]
+                #     else:
+                #         new_feat = torch.cat([self.feature_cache[1:], action.logits[-1]], dim=0)
+                #         self.feature_cache = new_feat
+                #         if not self.model.module.sep_lm_head:
+                #             self.model.module.lang_encoder.lm_head.window_size = window_size
+                #             lm_out = self.model.module.lang_encoder.lm_head(new_feat)
+                #         else:
+                #             self.model.module.lm_head.window_size = window_size
+                #             lm_out = self.model.module.lm_head(new_feat)
+                #         Output = namedtuple('Output', ['logits'])
+                #         action = Output(lm_out)
                 
                 if self.model.module.act_step == 1:
                     action = torch.concat((action.logits[0], action.logits[1] > 0.5), dim=2).squeeze(0)[-1] # support multi step history
@@ -361,10 +365,7 @@ class ModelWrapper(CalvinBaseModel):
                 action[-1] = (action[-1] - 0.5) * 2  # scale to -1 or 1
                 action = action.cpu().detach().to(dtype=torch.float16).numpy()
         
-        if self.model.module.sep_lm_head:
-            self.model.module.lm_head.window_size = window_size
-        else:
-            self.model.module.lang_encoder.lm_head.window_size = window_size
+        self.model.module.set_all_exit_window_size(window_size)
         if self.model.module.tcp_rel:
             state = obs['robot_obs']
             state = torch.from_numpy(np.stack([state])).unsqueeze(0).float().cpu().detach()
@@ -607,9 +608,21 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
         hist_len = args.n_obs_steps
     elif args.pad_length != -1:
         hist_len = args.pad_length
-    wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp)
-    evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
-
+    
+    if args.eval_exit_mode == 'last':    
+        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1)
+        evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
+        
+    elif args.eval_exit_mode == 'all':
+        torch.distributed.barrier()
+        if args.rank == 0: print("\nEvaluate all exits by numerical order!\n")
+        for exit_id in model.module.get_all_exit_idx():
+            if args.rank == 0: print('#'*40 + '\n' + f'Evaluate the exit with exit_id={exit_id}!\n' + '#'*40 + '\n')
+            wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id)
+            evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
+            torch.distributed.barrier() # don't conduct next eval until all threads reach
+    else:
+        raise NotImplementedError
 
 def main():
     seed_everything(0, workers=True)  # type:ignore
