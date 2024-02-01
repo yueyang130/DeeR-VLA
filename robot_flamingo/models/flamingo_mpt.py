@@ -53,6 +53,7 @@ class MPTFlamingo(nn.Module):
         early_exit_layer=-1,
         multi_exit=False,
         exit_interval=1,
+        exit_dropout=0.0,
     ):
         """
         Args:
@@ -134,10 +135,10 @@ class MPTFlamingo(nn.Module):
         if decoder_type == 'lstm':
             print(f'{head_type=}')
             if head_type == 'deterministic':
-                lm_head = DeterministicDecoder(in_features, self.window_size, 
+                lm_head = DeterministicDecoder(in_features, self.window_size, exit_dropout,
                     use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
             elif head_type == 'gaussian':
-                lm_head = GaussianDecoder(in_features, self.window_size, 
+                lm_head = GaussianDecoder(in_features, self.window_size, exit_dropout,
                     use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
                     tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
                 print(f'Use guassian policy! {tanh_squash_dist=}, {state_dependent_std=}')
@@ -193,10 +194,10 @@ class MPTFlamingo(nn.Module):
             def get_encoder():
                 if decoder_type == 'lstm':
                     if head_type == 'deterministic':
-                        lm_head = DeterministicDecoder(in_features, self.window_size, 
+                        lm_head = DeterministicDecoder(in_features, self.window_size, exit_dropout,
                             use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
                     elif head_type == 'gaussian':
-                        lm_head = GaussianDecoder(in_features, self.window_size, 
+                        lm_head = GaussianDecoder(in_features, self.window_size, exit_dropout,
                             use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
                             tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
                 elif decoder_type == 'fc':
@@ -366,7 +367,6 @@ class MPTFlamingo(nn.Module):
                 exit_action_output = get_action(exit_head, internal_feat, state_tensor)
                 exit_outputs.append(exit_action_output)
             return output, exit_outputs
-                
 
         return output
 

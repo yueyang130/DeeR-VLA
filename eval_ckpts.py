@@ -19,13 +19,20 @@ parser.add_argument("--eval_exit_mode", type=str, default='last', choices=['last
 # Parse the arguments
 args = parser.parse_args()
 
-search_path = os.path.join(args.ckpt_dir,  r'*[0-9].pth')
+search_path = os.path.join(args.ckpt_dir,  r'*_[0-9].pth')
 ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
-ckpt_names = ckpt_names[-1:]
-# ckpt_names = [
-#     'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth'
-# ]
+# ckpt_names = ckpt_names[-1:]
+ckpt_names = [
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_decay_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_decay_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.2_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.2_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.5_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.5_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+]
 
 print(ckpt_names)
 for ckpt_name in ckpt_names:

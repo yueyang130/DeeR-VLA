@@ -400,6 +400,7 @@ def main():
     readout_args(args, checkpoint, "precision", 'fp32')
     readout_args(args, checkpoint, "multi_exit", False)
     readout_args(args, checkpoint, "exit_interval", 1)
+    readout_args(args, checkpoint, "exit_dropout", 0.0)
     
     model, image_processor, tokenizer = create_model_and_transforms(
         args.vision_encoder_path,
@@ -444,6 +445,7 @@ def main():
         early_exit_layer=args.early_exit_layer,
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
+        exit_dropout=args.exit_dropout,
     )
     checkpoint_path = args.openflamingo_checkpoint
     print("Loading origin flamingo checkpoint from ", checkpoint_path)
@@ -480,8 +482,8 @@ def main():
         ckpt_dict = checkpoint["model_state_dict"]
     except:
         ckpt_dict = checkpoint  
-    ddp_model.load_state_dict(ckpt_dict, False)  # 只保存了求梯度的部分
     check_loaded_parameters(ddp_model, ckpt_dict)
+    ddp_model.load_state_dict(ckpt_dict, False)  # 只保存了求梯度的部分
 
     ddp_model.eval()
     eval_log_dir = None

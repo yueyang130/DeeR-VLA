@@ -322,6 +322,9 @@ def main():
     parser.add_argument("--multi_exit", action="store_true", default=False)
     parser.add_argument("--exit_interval", type=int, default=1, help='intervals between exits')
     parser.add_argument("--exit_weight", type=str, default='uniform', help='uniform/ascending/descending')
+    parser.add_argument("--exit_lr_scale", type=float, default=1.0, help='scale learning rate for exits')
+    parser.add_argument("--exit_dropout", type=float, default=0.0, help='')
+    parser.add_argument("--exit_decay", action="store_true", default=False)
 
     args = parser.parse_args()
     
@@ -398,7 +401,7 @@ def main():
         early_exit_layer=args.early_exit_layer,
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
-        
+        exit_dropout=args.exit_dropout,
     )
 
     checkpoint_path = args.openflamingo_checkpoint
@@ -446,28 +449,59 @@ def main():
     ddp_model = DDP(model, device_ids=[device_id], find_unused_parameters=True)
 
     def get_grouped_params(model):
-        params_with_wd, params_without_wd = [], []
+        param_groups = {}
 
         def apply_decay(x):
+            if not args.exit_decay:
+                apply_decay_bool = "gated_cross_attn_layer" in x
+            else:
+                apply_decay_bool = ("gated_cross_attn_layer" in x) or ('lm_head' in x) or ('lm_exit_modules' in x)
             return (
-                "gated_cross_attn_layer" in x
+                apply_decay_bool
                 and "ff_gate" not in x
                 and "attn_gate" not in x
                 and "norm" not in x
                 and "bias" not in x
             )
 
-        for n, p in model.named_parameters():
-            
-            if apply_decay(n):
-                params_with_wd.append(p)
+        def apply_lr_scale(n, p):
+            if 'lm_head' in n or 'lm_exit_modules' in n:
+                lr_scale = args.exit_lr_scale
             else:
-                params_without_wd.append(p)
+                lr_scale = 1.0
 
-        return [
-            {"params": [p for p in params_with_wd if p.requires_grad], "weight_decay": args.weight_decay},
-            {"params": [p for p in params_without_wd if p.requires_grad], "weight_decay": 0.0},
-        ]
+            if lr_scale not in param_groups:
+                param_groups[lr_scale] = []
+
+            param_groups[lr_scale].append((n, p))
+
+        # set lr_scale
+        for n, p in model.named_parameters():
+            apply_lr_scale(n, p)
+        # set weight decay
+        grouped_params = []
+        for lr_scale, params in param_groups.items():
+            params_with_wd, params_without_wd = [], []
+            for n, p in params:
+                if apply_decay(n):
+                    params_with_wd.append(p)
+                else:
+                    params_without_wd.append(p)
+            # Optimizer also support specifying per-parameter options. To do this, instead of passing an iterable of Variable s, pass in an iterable of dict s.
+            #! Each of them will define a separate parameter group, and should contain a params key, containing a list of parameters belonging to it. 
+            #! Other keys should match the keyword arguments accepted by the optimizers, and will be used as optimization options for this group.
+            # Adamw doesn't natively support per-parameter-group learning rate scaling through the "lr_scale" key in the parameter group dictionary.
+            # Unless update lr by lr_scale manually.
+            # grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": args.weight_decay})
+            # grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": 0.0})
+
+            lr = args.learning_rate * lr_scale  # Calculate the learning rate for this group
+            grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
+            grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
+
+        return grouped_params
+
+        
     args.learning_rate = args.learning_rate * args.batch_size_calvin / 6 # adaptive lr
     optimizer = torch.optim.AdamW(get_grouped_params(ddp_model), lr=args.learning_rate)
 

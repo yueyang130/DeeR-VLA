@@ -43,6 +43,7 @@ def save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, step):
         "multi_exit": args.multi_exit,
         "exit_interval": args.exit_interval,
         "exit_weight": args.exit_weight,
+        "exit_dropout": args.exit_dropout,
         "precision": args.precision,
         "model_state_dict": get_checkpoint(ddp_model),
         "optimizer_state_dict": optimizer.state_dict(),
@@ -67,6 +68,12 @@ def get_ckpt_prefix(args):
         ckpt_name += 'multi-exit_'
         ckpt_name += args.exit_weight
         ckpt_name += '_interval={}_'.format(args.exit_interval)
+    if args.exit_lr_scale != 1.0:
+        ckpt_name += 'lr_scale={}_'.format(args.exit_lr_scale)
+    if args.exit_dropout != 0:
+        ckpt_name += 'dropout={}_'.format(args.exit_dropout)
+    if args.exit_decay:
+        ckpt_name += 'decay_'
     if args.data_percent < 1.0:
         ckpt_name += f'data_{args.data_percent}_'
     if args.real_data:
@@ -842,6 +849,7 @@ def train_one_epoch_calvin_multi_exit(
                 
                 # get joint outputs
                 all_outputs = exit_outputs + [final_output.logits]
+                
                 num_action_list, gripper_logit_list = [], []
                 for output in all_outputs:
                     num_actions, bin_gripper = output[0], output[1]
@@ -985,6 +993,7 @@ def train_one_epoch_calvin_multi_exit(
                 wandb.log(
                     {
                          "lr": optimizer.param_groups[0]["lr"],
+                         "exit_lr": optimizer.param_groups[2]["lr"],
                         "loss_calvin": divided_loss_calvin.item(),
                         "loss_calvin_bin": loss_calvin_bin.mean().item(),
                         "loss_calvin_num": loss_calvin_num.mean().item(),

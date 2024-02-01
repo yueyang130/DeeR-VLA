@@ -23,51 +23,95 @@ def lstm_decoder(
     )
 
 class MLPTanhHead(torch.nn.Module):
-    def __init__(self, hidden_size, output_size):
+    def __init__(self, hidden_size, output_size, dropout):
         super().__init__()
-        self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, 1024),
-            torch.nn.ReLU(),
-            torch.nn.Linear(1024, 512),
-            torch.nn.ReLU(),
-            torch.nn.Linear(512, 256),
-            torch.nn.ReLU(),
-            torch.nn.Linear(256, output_size),
-            torch.nn.Tanh(),
-        )
+        if dropout > 0:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(hidden_size, 1024),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(1024, 512),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(512, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size),
+                torch.nn.Tanh(),
+            )
+        else: # workaround for loading old checkpoints
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Linear(hidden_size, 1024),
+                torch.nn.ReLU(),
+                torch.nn.Linear(1024, 512),
+                torch.nn.ReLU(),
+                torch.nn.Linear(512, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size),
+                torch.nn.Tanh(),
+            )
 
     def forward(self, x):
         return self.mlp(x)
 
 class MLPNohHead(torch.nn.Module):
-    def __init__(self, hidden_size, output_size):
+    def __init__(self, hidden_size, output_size, dropout):
         super().__init__()
-        self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, 1024),
-            torch.nn.ReLU(),
-            torch.nn.Linear(1024, 512),
-            torch.nn.ReLU(),
-            torch.nn.Linear(512, 256),
-            torch.nn.ReLU(),
-            torch.nn.Linear(256, output_size)
-        )
+        if dropout > 0:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(hidden_size, 1024),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(1024, 512),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(512, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size)
+            )
+        else:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Linear(hidden_size, 1024),
+                torch.nn.ReLU(),
+                torch.nn.Linear(1024, 512),
+                torch.nn.ReLU(),
+                torch.nn.Linear(512, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size)
+            )         
 
     def forward(self, x):
         return self.mlp(x)
 
 class MLPSigmoidHead(torch.nn.Module):
-    def __init__(self, hidden_size, output_size):
+    def __init__(self, hidden_size, output_size, dropout):
         super().__init__()
-        self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, 1024),
-            torch.nn.ReLU(),
-            torch.nn.Linear(1024, 512),
-            torch.nn.ReLU(),
-            torch.nn.Linear(512, 256),
-            torch.nn.ReLU(),
-            torch.nn.Linear(256, output_size),
-            torch.nn.Sigmoid(),
-        )
+        if dropout > 0:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(hidden_size, 1024),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(1024, 512),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(512, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size),
+                torch.nn.Sigmoid(),
+            )
+        else:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Linear(hidden_size, 1024),
+                torch.nn.ReLU(),
+                torch.nn.Linear(1024, 512),
+                torch.nn.ReLU(),
+                torch.nn.Linear(512, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size),
+                torch.nn.Sigmoid(),
+            )
 
     def forward(self, x, with_logits=False):
         for layer in self.mlp[:-1]:
@@ -78,25 +122,31 @@ class MLPSigmoidHead(torch.nn.Module):
             return self.mlp[-1](x)
 
 class MLPActionHead(torch.nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size, dropout):
         super().__init__()
         self.hidden_size = hidden_size
         # Create a linear layer for each action
         self.num_head = nn.Sequential(
+            torch.nn.Dropout(dropout), 
             nn.Linear(hidden_size, 1024),
             nn.ReLU(),
+            torch.nn.Dropout(dropout), 
             nn.Linear(1024, 512),
             nn.ReLU(),
+            torch.nn.Dropout(dropout), 
             nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, 6),
         )
 
         self.bin_head = nn.Sequential(
+            torch.nn.Dropout(dropout), 
             nn.Linear(hidden_size, 1024),
             nn.ReLU(),
+            torch.nn.Dropout(dropout), 
             nn.Linear(1024, 512),
             nn.ReLU(),
+            torch.nn.Dropout(dropout), 
             nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, 1),
@@ -159,6 +209,7 @@ class FCDecoder(ActionDecoder):
         self,
         in_features: int,
         window_size: int,
+        dropout: float,
         history_len = None,
         out_features: int = 6,
         hidden_size: int = 1024,
@@ -195,8 +246,10 @@ class FCDecoder(ActionDecoder):
         self.use_diff = use_diff
         
         self.mlp = torch.nn.Sequential(
+            torch.nn.Dropout(dropout), 
             torch.nn.Linear(in_features, in_features//2),
             torch.nn.ReLU(),
+            torch.nn.Dropout(dropout), 
             torch.nn.Linear(in_features//2, hidden_size),
         )
         if not use_diff:
@@ -248,6 +301,7 @@ class DeterministicDecoder(ActionDecoder):
         self,
         in_features: int,
         window_size: int,
+        dropout: float,
         history_len = None,
         out_features: int = 6,
         hidden_size: int = 1024,
@@ -259,7 +313,7 @@ class DeterministicDecoder(ActionDecoder):
         use_state=False,
         multi_step_action=1,
         return_feature=False,
-        pooling='max'
+        pooling='max',
     ):
         super(DeterministicDecoder, self).__init__()
         self.fc_state = None
@@ -293,8 +347,8 @@ class DeterministicDecoder(ActionDecoder):
         self.use_diff = use_diff
         self.fusion_mode = fusion_mode
         if not use_diff:
-            self.actions = MLPTanhHead(hidden_size, out_features*multi_step_action)
-            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action)
+            self.actions = MLPTanhHead(hidden_size, out_features*multi_step_action, dropout)
+            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action, dropout)
         self.hidden_state = None
         self.hidden_size = hidden_size
         self.rnn_out = None
@@ -416,6 +470,7 @@ class GaussianDecoder(ActionDecoder):
         self,
         in_features: int,
         window_size: int,
+        dropout: float,
         history_len = None,
         out_features: int = 6,
         hidden_size: int = 1024,
@@ -476,14 +531,14 @@ class GaussianDecoder(ActionDecoder):
         self.use_diff = use_diff
         self.fusion_mode = fusion_mode
         if not use_diff:
-            self.actions = MLPNohHead(hidden_size, out_features*multi_step_action)
+            self.actions = MLPNohHead(hidden_size, out_features*multi_step_action, dropout)
             if self.state_dependent_std:
-                self.std_network = MLPNohHead(hidden_size, out_features*multi_step_action)
+                self.std_network = MLPNohHead(hidden_size, out_features*multi_step_action, dropout)
             else:
                 self.log_std = nn.Parameter(torch.zeros(out_features*multi_step_action))
                 self.std_network = lambda x : self.log_std
             
-            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action)
+            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action, dropout)
         self.hidden_state = None
         self.hidden_size = hidden_size
         self.rnn_out = None
