@@ -94,6 +94,8 @@ def get_ckpt_prefix(args):
         ckpt_name += 'aug_{}_{}_'.format(args.rgb_pad, args.gripper_pad)
     if args.use_hist:
         ckpt_name += 'fc_'
+    if args.multi_step_action != 1:
+        ckpt_name += '{}_step_'.format(args.multi_step_action)
     if args.head_type == "diffusion":
         ckpt_name += 'diff_'
     if args.head_type == "gaussian":
@@ -123,8 +125,6 @@ def get_ckpt_prefix(args):
         ckpt_name += 'freeze_emb_'
     if args.tcp_rel:
         ckpt_name += 'tcp_'
-    if args.multi_step_action != 1:
-        ckpt_name += '{}_fur_step_'.format(args.multi_step_action)
     if args.decoder_type != 'lstm':
         ckpt_name += '{}_{}_'.format(args.decoder_type, args.hidden_size)
     if args.lr_scheduler != 'constant':

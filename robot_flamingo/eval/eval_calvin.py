@@ -198,7 +198,7 @@ def main():
         help="whether to train the model from scratch",
     )
     parser.add_argument("--n_obs_steps", default=6, type=int)
-    parser.add_argument("--future_act_len", default=-1, type=int)
+    parser.add_argument("--future_act_len", default=-1, type=int) # For diffusion head. Only use K predicted actions
     parser.add_argument("--diff_horizon", default=32, type=int)
     parser.add_argument(
         "--last_action",
@@ -299,7 +299,6 @@ def main():
     parser.add_argument("--max_window_size", type=int, default=24)
     parser.add_argument("--llm_name", type=str, default='llama_9b')
     parser.add_argument("--pooling", type=str, default='max')
-    parser.add_argument("--multi_step_action", type=int, default=1, help="multiple step action prediction")
     
     parser.add_argument(
         "--amp",
@@ -309,6 +308,9 @@ def main():
     
     # multi-exit eval
     parser.add_argument("--eval_exit_mode", type=str, default='last') # only eval the last exit / all exits / early-exit mechanism
+    # timestep dynamic
+    parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
+
     
     args = parser.parse_args()
     
@@ -331,9 +333,11 @@ def main():
         args.residual = True
     if 'tcp' in args.evaluate_from_checkpoint:
         args.tcp_rel = True
-    if 'fur' in args.evaluate_from_checkpoint.split('_'):
+    if 'step' in args.evaluate_from_checkpoint.split('_'):
         name_attrs = args.evaluate_from_checkpoint.split('_')
         args.multi_step_action = int(name_attrs[name_attrs.index('fur')-1])
+    else:
+        args.multi_step_action = 1
     if 'difws' in args.evaluate_from_checkpoint:
         args.dif_ws = True
         name_attrs = args.evaluate_from_checkpoint.split('_')
@@ -391,7 +395,7 @@ def main():
         else:
             value = default
         setattr(args, name, value)
-        print(f'set {name} to {value}!')
+        if args.rank==0: print(f'set {name} to {value}!')
         
     readout_args(args, checkpoint, 'head_type', 'deterministic')
     readout_args(args, checkpoint, 'tanh_squash_dist', False)

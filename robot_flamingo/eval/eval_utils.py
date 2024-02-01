@@ -117,7 +117,7 @@ def make_env_debug(dataset_path):
 
 
 class ModelWrapper(CalvinBaseModel):
-    def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1, amp=False, exit_id=None, early_exit=False):
+    def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1, amp=False, exit_id=None, early_exit=False, multi_execution=1):
         super().__init__()
         self.model = model
         self.replan = model.module.replan
@@ -132,10 +132,20 @@ class ModelWrapper(CalvinBaseModel):
         self.fusion_mode = self.model.module.fusion_mode
         self.amp = amp
         self.head_type = model.module.head_type
-        if self.amp:
+        if self.amp and torch.distributed.get_rank()==0:
             print("Enable AMP during inference!")
         self.exit_id = exit_id
         self.dynamic_early_exit = early_exit
+        self.multi_execution = multi_execution
+        
+        if self.model.module.act_step==1:
+            if self.multi_execution > 1:
+                if torch.distributed.get_rank()==0:
+                    print(f'Repeatedly execute one predicted action {self.multi_execution} times!')
+        else:
+            assert self.multi_execution <= self.model.module.act_step
+            if torch.distributed.get_rank()==0:
+                print(f'Predict {self.model.module.act_step} actions and executed {self.multi_execution} actions!')
         
         if use_diff:
             self.diffusion_model = None
@@ -201,6 +211,9 @@ class ModelWrapper(CalvinBaseModel):
         Returns:
             action: predicted action
         """
+        
+        if not get_action:
+            return None
 
         # preprocess image
         image = obs["rgb_obs"]['rgb_static']
@@ -354,24 +367,32 @@ class ModelWrapper(CalvinBaseModel):
                 
                 if self.model.module.act_step == 1:
                     action = torch.concat((action.logits[0], action.logits[1] > 0.5), dim=2).squeeze(0)[-1] # support multi step history
+                    action[-1] = (action[-1] - 0.5) * 2  # scale to -1 or 1
+                    action = torch.stack([action]*self.multi_execution, dim=0)
+                    
                 else:
                     pose = action.logits[0]
                     gripper = action.logits[1] > 0.5
                     pose = pose.squeeze(0)[-1].view(self.model.module.act_step, -1)
                     gripper = gripper.squeeze(0)[-1].view(self.model.module.act_step, -1)
                     action = torch.cat([pose, gripper], dim=-1)
-                    action = action[0] # select first step action
-                    
-                action[-1] = (action[-1] - 0.5) * 2  # scale to -1 or 1
+                    # action = action[0] # select first step action
+                    action[:, -1] = (action[:, -1] - 0.5) * 2  # scale to -1 or 1
+                    action = action[:self.multi_execution]
+                
                 action = action.cpu().detach().to(dtype=torch.float16).numpy()
+                
         
         self.model.module.set_all_exit_window_size(window_size)
+        
         if self.model.module.tcp_rel:
+            raise NotImplementedError
             state = obs['robot_obs']
             state = torch.from_numpy(np.stack([state])).unsqueeze(0).float().cpu().detach()
             action = torch.from_numpy(np.stack([action])).unsqueeze(0).float().cpu().detach()
             action = tcp_to_world_frame(action, state)
             action=action.squeeze().to(dtype=torch.float16).numpy()
+            
         return action
 
 
@@ -610,7 +631,7 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
         hist_len = args.pad_length
     
     if args.eval_exit_mode == 'last':    
-        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1)
+        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1, multi_execution=args.multi_execution)
         evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
         
     elif args.eval_exit_mode == 'all':
@@ -618,7 +639,7 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
         if args.rank == 0: print("\nEvaluate all exits by numerical order!\n")
         for exit_id in model.module.get_all_exit_idx():
             if args.rank == 0: print('#'*40 + '\n' + f'Evaluate the exit with exit_id={exit_id}!\n' + '#'*40 + '\n')
-            wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id)
+            wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id, multi_execution=args.multi_execution)
             evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
             torch.distributed.barrier() # don't conduct next eval until all threads reach
     else:

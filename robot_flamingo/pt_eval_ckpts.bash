@@ -23,6 +23,7 @@ single_step=$8
 amp=$9
 # eval_exit_mode=$10
 eval_exit_mode=${10}
+multi_execution=${11}
 export MESA_GL_VERSION_OVERRIDE=4.1
 echo logging to ${log_file}
 
@@ -51,6 +52,7 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --calvin_conf_path ${calvin_conf_path} \
     --amp ${amp} \
     --eval_exit_mode ${eval_exit_mode} \
+    --multi_execution ${multi_execution} \
     --workers 1 > ${log_file} 2>&1
 fi
 
@@ -68,6 +70,7 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --calvin_conf_path ${calvin_conf_path} \
     --amp ${amp} \
     --eval_exit_mode ${eval_exit_mode} \
+    --multi_execution ${multi_execution} \
     --workers 1 > ${log_file} 2>&1
 fi
 
@@ -84,5 +87,6 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --calvin_conf_path ${calvin_conf_path} \
     --amp ${amp} \
     --eval_exit_mode ${eval_exit_mode} \
+    --multi_execution ${multi_execution} \
     --workers 1 > ${log_file} 2>&1
 fi
