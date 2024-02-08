@@ -176,6 +176,7 @@ class MPTFlamingo(nn.Module):
         if sep_lm_head:
             self.lm_head = self.lang_encoder.lm_head
             self.lang_encoder.lm_head = nn.Identity()
+        self.in_features = in_features
         
         if early_exit_layer < 0:
             early_exit_layer += lang_encoder.config.n_layers
@@ -235,6 +236,9 @@ class MPTFlamingo(nn.Module):
     def get_all_exit_idx(self):
         return list(self.lm_exits.keys()) + [self.lang_encoder.config.n_layers - 1]
     
+    def get_exit_num(self):
+        return len(self.get_all_exit_idx())
+    
     def set_all_exit_window_size(self, new_window_size):
         if self.sep_lm_head:
             window_size = self.lm_head.window_size
@@ -247,7 +251,7 @@ class MPTFlamingo(nn.Module):
             for exit in self.lm_exit_modules:
                 exit.window_size = new_window_size
         return window_size
-
+    
     def forward(
         self,
         vision_x: torch.Tensor,
@@ -369,7 +373,7 @@ class MPTFlamingo(nn.Module):
             return output, exit_outputs
 
         return output
-
+        
     def _encode_vision_x(self, vision_x: torch.Tensor):
         """
         Compute media tokens from vision input by passing it through vision encoder and conditioning language model.
