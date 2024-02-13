@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
-from train_utils import get_checkpoint, train_policy_one_epoch_calvin_multi_exit, get_ckpt_name, save_value_net_ckpt
+from train_utils import get_checkpoint, train_value_net_one_epoch_calvin_multi_exit, get_ckpt_name, save_value_net_ckpt
 from robot_flamingo.eval.eval_utils import check_loaded_parameters
 from torch.distributed.elastic.multiprocessing.errors import record
 from transformers import (
@@ -575,7 +575,7 @@ def main():
             raise NotImplementedError
         else:
             if args.multi_exit:
-                train_policy_one_epoch_calvin_multi_exit(
+                train_value_net_one_epoch_calvin_multi_exit(
                     args=args,
                     model=ddp_model,
                     value_net=ddp_value_net,

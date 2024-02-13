@@ -3,6 +3,7 @@
 import argparse
 import glob
 import os
+import re
 import random
 from robot_flamingo.eval.eval_utils import eval_one_epoch_calvin_ddp
 from torch.distributed.elastic.multiprocessing.errors import record
@@ -20,7 +21,7 @@ from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp, check_loaded_parameters
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-
+from models.value_net import ValueNet, LSTMValueHead, ExitController
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed)
@@ -175,8 +176,6 @@ def main():
         help="whether use separate resamplers for third party and gripper camera",
     )
     parser.add_argument("--train_params", type=int, default=-1)
-    parser.add_argument('--rgb_pad', type=int, default=-1)
-    parser.add_argument('--gripper_pad', type=int, default=-1)
     parser.add_argument('--n_timesteps', type=int, default=150, help="diffusion time steps")
     parser.add_argument(
         "--predict_epsilon",
@@ -211,6 +210,16 @@ def main():
         default=False,
         action="store_true",
         help="whether using multi-image encoder"
+    )
+    parser.add_argument(
+        "--partial_data",
+        default=False,
+        action="store_true"
+    )
+    parser.add_argument(
+        "--data_percent", 
+        type=float, 
+        default=1.0
     )
     parser.add_argument(
         "--debug",
@@ -307,16 +316,28 @@ def main():
     )
     
     # multi-exit eval
-    parser.add_argument("--eval_exit_mode", type=str, default='last') # only eval the last exit / all exits / early-exit mechanism
+    parser.add_argument("--eval_exit_mode", type=str, default='last') # [last/all/dynamic] eval the last exit / all exits / dynamic exit mechanism
     # timestep dynamic
     parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
-
+    # dynamic early-exit
+    parser.add_argument("--value_net_ckpt", type=str, default=None) 
+    parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
+    
     
     args = parser.parse_args()
     
     print(f'{args.amp=}')
     print(f'{args.eval_exit_mode=}')
     
+    args.real_data = True if 'real' in args.evaluate_from_checkpoint else False
+    # Search for the pattern in args.evaluate_from_checkpoint
+    match = re.search(r'aug_(\d+)_(\d+)', args.evaluate_from_checkpoint)
+    if match:
+        args.rgb_pad = int(match.group(1))
+        args.gripper_pad = int(match.group(2))
+    else:
+        args.rgb_pad = -1
+        args.gripper_pad = -1
     if args.head_type == "diffusion":
         args.pad_length = args.n_obs_steps
     if args.eval_hist_size == -1:
@@ -338,6 +359,14 @@ def main():
         args.multi_step_action = int(name_attrs[name_attrs.index('step')-1])
     else:
         args.multi_step_action = 1
+    if 'text_aug' in args.evaluate_from_checkpoint:
+        args.text_aug = True
+    else:
+        args.text_aug = False
+    if 'traj_cons' in args.evaluate_from_checkpoint:
+        args.traj_cons = True
+    else:
+        args.traj_cons = False
     if 'difws' in args.evaluate_from_checkpoint:
         args.dif_ws = True
         name_attrs = args.evaluate_from_checkpoint.split('_')
@@ -347,6 +376,8 @@ def main():
         args.min_window_size = min_ws
         args.max_window_size = max_ws
         args.window_size = max_ws
+    else:
+        args.dif_ws = False
     if 'latent' in args.evaluate_from_checkpoint:
         name_attrs = args.evaluate_from_checkpoint.split('_')
         ix = name_attrs.index('latent')
@@ -488,8 +519,52 @@ def main():
         ckpt_dict = checkpoint  
     check_loaded_parameters(ddp_model, ckpt_dict)
     ddp_model.load_state_dict(ckpt_dict, False)  # 只保存了求梯度的部分
-
     ddp_model.eval()
+    
+    if args.eval_exit_mode == 'dynamic':
+        assert args.value_net_ckpt is not None, "Please specify a checkpoint for value net."
+        if args.rank == 0:
+            print(f"Loading value net checkpoint from {args.value_net_ckpt}")
+        value_net_ckpt = torch.load(args.value_net_ckpt, map_location="cpu")
+        
+        readout_args(args, value_net_ckpt, "with_exit_embed", False)
+        
+        num_exit = model.get_exit_num()
+        value_net = LSTMValueHead(
+            in_features=model.lm_head.in_features, 
+            window_size=args.eval_hist_size,
+            dropout=0.0,
+            hidden_size=model.lm_head.hidden_size,
+            out_features=1,
+            fusion_mode=args.fusion_mode, 
+            use_state=args.use_state, 
+            pooling=args.pooling,
+            with_exit_embed=args.with_exit_embed,
+            num_exits=num_exit,
+        )
+        
+        value_net_ckpt_dict = {k.replace('module.', ''): v for k, v in value_net_ckpt["model_state_dict"].items()} # remove ddp prefix
+        value_net_ckpt_dict = {k.replace('value_net.', 'head.'): v for k, v in value_net_ckpt_dict.items()} # Be compatible with previous value_net code
+        value_net.load_state_dict(value_net_ckpt_dict, True)
+        
+        exit_controller = ExitController(value_net, num_exit, leq=True)
+        exit_controller = exit_controller.to(device_id)
+        exit_controller.eval()
+        ddp_exit_controller = DDP(exit_controller, device_ids=[device_id])
+        
+        # setup dataloader for dynamically finding thresholds
+        if args.debug:
+            calvin_dataset = get_data(args, image_processor, tokenizer, "debug")
+        # elif args.real_data:
+        #     calvin_dataset = get_data(args, image_processor, tokenizer, "real")
+        else:
+            calvin_dataset = get_data(args, image_processor, tokenizer, "calvin")
+        calvin_dataset.set_epoch(0)
+        calvin_loader = calvin_dataset.dataloader
+    else:
+        ddp_exit_controller = None
+        calvin_loader = None
+    
     eval_log_dir = None
     if args.visualize:
         eval_log_dir = 'evaluate/{}'.format(args.evaluate_from_checkpoint.split('.')[0])
@@ -503,7 +578,9 @@ def main():
         eval_log_dir=eval_log_dir,
         debug=args.visualize,
         reset=args.reset,
-        diverse_inst=args.diverse_inst
+        diverse_inst=args.diverse_inst,
+        exit_controller=ddp_exit_controller,
+        dataloader=calvin_loader,
     )
 
 

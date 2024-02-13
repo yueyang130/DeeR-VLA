@@ -7,8 +7,10 @@ import sys
 import time
 import PIL.Image as Image
 import copy
+import math
 from collections import deque
 from moviepy.editor import ImageSequenceClip
+import torch
 # This is for using the locally installed repo clone when using slurm
 from calvin_agent.models.calvin_base_model import CalvinBaseModel
 sys.path.insert(0, Path(__file__).absolute().parents[2].as_posix())
@@ -117,7 +119,8 @@ def make_env_debug(dataset_path):
 
 
 class ModelWrapper(CalvinBaseModel):
-    def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1, amp=False, exit_id=None, early_exit=False, multi_execution=1):
+    def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1,
+                 amp=False, exit_id=None, early_exit=False, exit_controller=None, multi_execution=1, ):
         super().__init__()
         self.model = model
         self.replan = model.module.replan
@@ -136,6 +139,7 @@ class ModelWrapper(CalvinBaseModel):
             print("Enable AMP during inference!")
         self.exit_id = exit_id
         self.dynamic_early_exit = early_exit
+        self.exit_controller = exit_controller
         self.multi_execution = multi_execution
         
         if self.model.module.act_step==1:
@@ -196,12 +200,12 @@ class ModelWrapper(CalvinBaseModel):
         self.feature_cache = None
         self.dt_feat_cache = []
         
-        self.model.module.lang_encoder.lm_head.hidden_state = None
-        self.model.module.lang_encoder.lm_head.history_memory = []
-
-        if self.model.module.sep_lm_head:
-            self.model.module.lm_head.hidden_state = None
-            self.model.module.lm_head.history_memory = []
+        # clear LSTM hidden states
+        self.model.module.clear_all_exit_memory()
+        
+        # LSTM value net
+        self.exit_controller.module.value_net.hidden_state = None
+        self.exit_controller.module.value_net.history_memory = []
 
     def step(self, obs, goal, get_action=True,):
         """
@@ -230,8 +234,12 @@ class ModelWrapper(CalvinBaseModel):
         # training: set window_size = 12 and set hidden_state = None and calculate it from scratch
         if self.model.module.pad_length != -1 and self.feature_cache is None:
             window_size = self.model.module.set_all_exit_window_size(self.model.module.pad_length)
+            if self.exit_controller is not None:
+                self.exit_controller.module.value_net.window_size = self.model.module.pad_length
         else:
             window_size = self.model.module.set_all_exit_window_size(1)
+            if self.exit_controller is not None:
+                self.exit_controller.module.value_net.window_size = 1
 
         gripper = None
         state = None
@@ -345,10 +353,11 @@ class ModelWrapper(CalvinBaseModel):
                     vision_x = torch.cat([image_x, gripper], dim=0)
                     text_x = text_x.repeat(2, 1)
                     mask = mask.repeat(2, 1)
+                    assert False, "please update the code for dynamic exit"
                     action = self.model(vision_x=vision_x, lang_x=text_x, attention_mask=mask, state_tensor = state, return_feature=True)
                 else:
                     action = self.model(vision_x=image_x, lang_x=text_x, attention_mask=mask, vision_gripper = gripper, state_tensor = state, return_feature=True, 
-                                        deterministic=True, exit_id=self.exit_id, dynamic_early_exit=self.dynamic_early_exit)
+                                        deterministic=True, exit_id=self.exit_id, dynamic_early_exit=self.dynamic_early_exit, exit_controller=self.exit_controller)
                 
                 # if self.model.module.pad_length != -1:
                 #     if self.feature_cache is None:
@@ -579,6 +588,9 @@ def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug, eva
             if model.model.module.refresh != -1:
                 model.model.module.lang_encoder.lm_head.hidden_state = None
                 model.model.module.lang_encoder.lm_head.history_memory = model.model.module.lang_encoder.lm_head.history_memory[-model.refresh:]
+                # refresh hidden state for LSTM value net
+                model.exit_controller.module.value_net.hidden_state = None
+                model.exit_controller.module.value_net.history_memory = model.exit_controller.module.value_net.history_memory[-model.refresh:]
             else:
                 model.reset()
         action = model.step(obs, lang_annotation, (len(planned_actions) == 0))
@@ -620,7 +632,7 @@ def eval_one_epoch_calvin(args, model, dataset_path, image_processor, tokenizer,
     evaluate_policy(wrapped_model, env, 0, args.calvin_conf_path)
 
 
-def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokenizer, eval_log_dir=None, debug=False, future_act_len=-1, reset=False, diverse_inst=False):
+def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokenizer, eval_log_dir=None, debug=False, future_act_len=-1, reset=False, diverse_inst=False, exit_controller=None, dataloader=None):
 
     env = make_env(dataset_path)
     cast_dtype = get_cast_dtype(args.precision)
@@ -642,6 +654,13 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
             wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id, multi_execution=args.multi_execution)
             evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
             torch.distributed.barrier() # don't conduct next eval until all threads reach
+    
+    elif args.eval_exit_mode == 'dynamic':
+        if args.rank == 0: print("\nEvaluate with dynamic exit!\n")
+        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, early_exit=True, exit_controller=exit_controller, multi_execution=args.multi_execution)
+        exit_controller.module.set_threshold(args, model, dataloader, args.exit_ratio)
+        evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
+
     else:
         raise NotImplementedError
 

@@ -4,6 +4,16 @@ import torch.nn.functional as F
 from robot_flamingo.models.action_head import MLPNohHead, lstm_decoder
 import copy
 from typing import Optional, Tuple
+from tqdm.auto import tqdm
+import math
+
+def get_cast_dtype(precision: str):
+    cast_dtype = None
+    if precision == "bf16" or precision == "amp_bf16":
+        cast_dtype = torch.bfloat16
+    elif precision == "fp16":
+        cast_dtype = torch.float16
+    return cast_dtype
 
 class ValueNet(nn.Module):
     def __init__(self, hidden_size, feat_size, dropout, with_layer_embed=False):
@@ -68,7 +78,7 @@ class LSTMValueHead(nn.Module):
         self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p)
         self.fusion_mode = fusion_mode
         
-        self.value_net = MLPNohHead(hidden_size, 1, dropout)
+        self.head = MLPNohHead(hidden_size, 1, dropout)
 
         self.hidden_state = None
         self.hidden_size = hidden_size
@@ -87,6 +97,10 @@ class LSTMValueHead(nn.Module):
 
     def clear_hidden_state(self) -> None:
         self.hidden_state = None
+        
+    def update_memory(self):
+        self.history_memory.append(self.tmp_input_feature)
+        self.hidden_state = self.tmp_hidden_state
 
     def forward(  # type: ignore
         self,
@@ -94,6 +108,12 @@ class LSTMValueHead(nn.Module):
         h_0: Optional[torch.Tensor] = None,
         state_tensor=None,
     ):
+        """
+        The key difference between LSTMActionHead and LSTMValueHead lies in hidden states with inference.
+        For LSTMActionHead, we update history_memory and hidden_state at every inference.
+        For LSTMValueHead, we infer the values of exits from lowest and highest unitl early exit, and only use the hidden state of the early exit one.
+        """
+        
         # (num_layer, bs * action_seq_len, lang_len, d) --> (num_exit * bs * action_seq_len, lang_len, d)
         if input_feature.dim() == 4:
             input_feature = input_feature.reshape(-1, *input_feature.shape[2:]) 
@@ -134,13 +154,13 @@ class LSTMValueHead(nn.Module):
             input_feature = input_feature + state_embeddings
         
         if not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase):
-            # print('history len:',self.history_len)
             if input_feature.shape[1] == 1:  # the first frame of an action sequence
-                self.history_memory.append(input_feature)
+                # infernece
+                self.tmp_input_feature = input_feature
                 if len(self.history_memory) <= self.history_len:
                     # print('cur hist_mem len: {}'.format(len(self.history_memory)))
                     x, h_n = self.rnn(input_feature, self.hidden_state)
-                    self.hidden_state = h_n
+                    self.tmp_hidden_state = h_n
                     x = x[:, -1].unsqueeze(1)
                     self.rnn_out = x.squeeze(1)
                 else:
@@ -156,6 +176,7 @@ class LSTMValueHead(nn.Module):
                     x = x[:, -1].unsqueeze(1)
                     self.rnn_out = x.squeeze(1)
             else:
+                # train
                 # print('input feature lenght > 1', input_feature.shape)
                 self.hidden_state = h_0
                 x, h_n = self.rnn(input_feature, self.hidden_state) # (exits * bs, seq_len, d) --> (exits * bs, seq_len, d) LSTM go along action seqence
@@ -164,5 +185,243 @@ class LSTMValueHead(nn.Module):
         else:
             raise NotImplementedError
 
-        values = self.value_net(x) # (exits * bs, seq_len, 1)
+        values = self.head(x) # (exits * bs, seq_len, 1)
         return values
+    
+
+class ExitController(torch.nn.Module):
+    def __init__(self, value_net, num_exit, leq=True):
+        super().__init__()
+        self.value_net = value_net
+        self.thresholds = None
+        self.leq = leq
+        self.num_exit = num_exit
+        
+    def set_threshold(self, args, model, dataloader, exit_ratio):   
+        device_id = torch.distributed.get_rank()
+        num_devices = torch.distributed.get_world_size()
+        pred_value_list, target_value_list = generate_values(args, model, self.value_net, dataloader, device_id=device_id)
+    
+        # Initialize tensors to hold the gathered data
+        pred_value_gathered = [torch.zeros_like(pred_value_list) for _ in range(num_devices)]
+        target_value_gathered = [torch.zeros_like(target_value_list) for _ in range(num_devices)]
+
+        # Gather data
+        torch.distributed.all_gather(pred_value_gathered, pred_value_list)
+        torch.distributed.all_gather(target_value_gathered, target_value_list)
+        pred_value_gathered = torch.cat(pred_value_gathered, dim=1)
+        target_value_gathered = torch.cat(target_value_gathered, dim=1)
+        
+        # flatten bs and action length
+        pred_value_gathered = pred_value_gathered.flatten(1, 2)
+        target_value_gathered = target_value_gathered.flatten(1, 2)
+            
+        n_stage, n_sample = pred_value_gathered.size() # (exit, bs * seq_length)
+        _, sorted_idx = pred_value_gathered.sort(dim=1, descending=not self.leq)
+
+        filtered = torch.zeros(n_sample)
+        T = torch.Tensor(n_stage).fill_(-1e8) if self.leq else torch.Tensor(n_stage).fill_(1e8)
+        probs = exit_ratio ** torch.arange(1, self.num_exit) # n-1 (exclude the last exit)
+        probs /= probs.sum()
+
+        for k in range(n_stage - 1):
+            count = 0
+            out_n = math.floor(n_sample * probs[k])
+            for i in range(n_sample):
+                ori_idx = sorted_idx[k][i]
+                if filtered[ori_idx] == 0:
+                    count += 1
+                    if count == out_n:
+                        T[k] = pred_value_gathered[k][ori_idx]
+                        break
+            if self.leq:
+                # Don't use le (less or equal). Many samples with the same value are counted.
+                # filtered.add_(pred_value_gathered[k].le(T[k]).type_as(filtered))
+                filtered.add_(pred_value_gathered[k].less(T[k]).type_as(filtered))
+            else:
+                filtered.add_(pred_value_gathered[k].greater(T[k]).type_as(filtered))
+
+        if self.leq:
+            T[n_stage - 1] = 1e8
+        else:
+            T[n_stage - 1] = -1e8
+  
+        self.thresholds = T
+    
+    @torch.no_grad()  
+    def forward(self, x, i):
+        assert self.thresholds is not None, "Please set thresholds before calling forward"
+        
+        value = self.value_net(x)
+        if bool(value <= self.thresholds[i]) is self.leq: # both be true or both be false
+            # Already find the dynamic exit. We need to update hidden state
+            self.value_net.update_memory()
+            return True 
+        else:
+            return False
+        
+
+
+@torch.no_grad()
+def generate_values(
+    args,
+    model,
+    value_net,
+    calvin_loader,
+    device_id,
+):
+    num_batches_per_epoch_calvin = calvin_loader.num_batches
+    num_batches_per_epoch = num_batches_per_epoch_calvin
+
+    cast_dtype = get_cast_dtype(args.precision)
+
+    model.eval()
+    value_net.eval()
+
+    # loop through dataloader
+    t = tqdm(
+        enumerate(calvin_loader),
+        disable=args.rank != 0,
+        total=num_batches_per_epoch,
+        initial=0,
+    )
+    t.set_description(f"generate values ")
+    mv_avg_loss = []
+    pred_value_list, target_value_list = [], []
+    for num_steps, batch_calvin in t:
+        global_step = num_steps
+        
+        # put images and labels on device
+        images = (batch_calvin[0].to(device_id, dtype=cast_dtype, non_blocking=True).unsqueeze(2).unsqueeze(2))
+        gripper = (batch_calvin[3].to(device_id, dtype=cast_dtype, non_blocking=True).unsqueeze(2).unsqueeze(2))
+
+        # input_ids is LongTensor and does not require conversion precision
+        # repeat the input_ids to match the sequence length of the images
+        if args.fusion_mode != 'vit_concat':
+            input_ids = batch_calvin[1][0].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, images.shape[1], 1)
+        else:
+            input_ids = batch_calvin[1][0].to(device_id, non_blocking=True)
+        # input_ids = batch_calvin[1][0].to(device_id, non_blocking=True)
+
+        # do the same to the attention mask 
+        if args.fusion_mode != 'vit_concat':
+            attention_mask = batch_calvin[1][1].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, images.shape[1], 1)
+        else:
+            attention_mask = batch_calvin[1][1].to(device_id, non_blocking=True)
+        
+        state_tensor = batch_calvin[4].to(device_id, dtype=cast_dtype, non_blocking=True)
+        robot_obs = batch_calvin[5].to(device_id, dtype=cast_dtype, non_blocking=True)
+        if args.clip_state:
+            state_tensor = torch.cat([state_tensor[..., :6], state_tensor[..., [-1]]], dim=-1)
+        labels = batch_calvin[2].to(device_id, dtype=cast_dtype, non_blocking=True)
+        if args.tcp_rel:
+            if args.multi_step_action == 1:
+                labels = world_to_tcp_frame(labels, state_tensor)
+            else:
+                bs, seq_len = labels.shape[:2]
+                labels = world_to_tcp_frame(labels, robot_obs)
+                labels = labels.view(bs, seq_len, args.multi_step_action, -1)
+        
+        state_tensor = state_tensor.unsqueeze(2).unsqueeze(2)
+
+        # merge the batch and the sequence dimension
+        images = images.flatten(0, 1)
+        gripper = gripper.flatten(0, 1)
+        state_tensor = state_tensor.flatten(0, 1)
+        if args.fusion_mode != 'vit_concat':
+            input_ids = input_ids.flatten(0, 1)
+            attention_mask = attention_mask.flatten(0, 1)
+
+        # [:6] is the joint position and [6:] is the gripper control, which is -1, 1, thus we need to convert it to 0, 1
+        if args.use_hist:
+            labels = labels[:, [-1]]  # only calculate last step action
+        if args.fusion_mode == 'vit_concat':
+            labels = labels[:, -1]
+        labels = [labels[..., :6], (labels[..., 6:] + 1) // 2]
+
+        with torch.cuda.amp.autocast(enabled=args.amp):
+        # with torch.cuda.amp.autocast(enabled=False): # forbid float16 to avoid the loss of loss value accuray, which may results in many equal loss values.
+            # get loss for each layer as target label
+            with torch.no_grad():
+                if args.head_type == 'deterministic':
+                    final_output, exit_outputs = model(
+                        vision_x=images,
+                        lang_x=input_ids,
+                        attention_mask=attention_mask,
+                        # labels=labels,  # loss计算放在外面
+                        vision_gripper=gripper,
+                        state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                        with_gripper_logits=True,
+                    )
+                    
+                    # get joint outputs
+                    all_outputs = exit_outputs + [final_output.logits]
+                    
+                    num_action_list, gripper_logit_list = [], []
+                    for output in all_outputs:
+                        num_actions, bin_gripper = output[0], output[1]
+                        bin_actions, bin_logits = bin_gripper
+                        if args.multi_step_action != 1:
+                            bs, seq_len = num_actions.shape[:2]
+                            num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                            # bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                            bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
+                        num_action_list.append(num_actions)
+                        gripper_logit_list.append(bin_logits)
+
+                    # get action loss per head type
+                    num_actions = torch.stack(num_action_list, dim=0)
+                    loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0][None], reduction='none').mean(-1)
+                    # print(f'{loss_calvin_num.shape=}')
+                    
+                    loss_mse = loss_calvin_num.mean()
+                    loss_mle = torch.tensor([.0])
+                    std = torch.tensor([.0])
+                elif args.head_type == 'gaussian':
+                    raise NotImplementedError("Please fix the bug in gaussian policy in single exit before running multi-exit gaussian policy!")
+
+                # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
+                bin_logits = torch.stack(gripper_logit_list, dim=0)
+                bin_targets = torch.stack([labels[1]] * len(all_outputs), dim=0)
+                loss_calvin_bin = torch.nn.functional.binary_cross_entropy_with_logits(bin_logits, bin_targets, reduction='none').mean(-1)
+                # print(f'{loss_calvin_num.shape=}')
+                
+                # loss for each layer and each sample
+                if args.head_type == 'deterministic':
+                    if args.real_data:
+                        loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
+                    else:
+                        loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
+                elif args.head_type == 'gaussian':
+                    loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
+                loss_calvin *= args.loss_multiplier_calvin
+                # weights = get_exit_weights('uniform', len(all_outputs), device=loss_calvin.device)
+                # weights = weights * weights.shape[0] 
+                # loss_calvin *= weights
+                
+                
+                #### MASK GRADIENTS FOR EMBEDDINGS ####
+                # Note (anas): Do not apply weight decay to embeddings as it will break this function.
+                # def mask_embedding(m):
+                #     if isinstance(m, torch.nn.Embedding) and m.weight.requires_grad and m.weight.grad is not None:
+                #         zero_mask = torch.zeros_like(m.weight.grad)
+                #         zero_mask[media_token_id] = torch.ones_like(zero_mask[media_token_id])
+                #         zero_mask[endofchunk_token_id] = torch.ones_like(
+                #             zero_mask[endofchunk_token_id]
+                #         )
+                #         m.weight.grad = m.weight.grad * zero_mask
+                # model.apply(mask_embedding)
+
+            # train value net
+            features = torch.stack(final_output.hidden_states, dim=0) 
+            values = value_net(features) # (exits, bs * seq_len, lang_len, 1) -> (exits * bs, seq_len, 1)
+            values = values.reshape(len(all_outputs), -1, values.shape[1]) # (exits, bs, seq_len, 1)
+            target_values = loss_calvin.detach()
+            
+            # record
+            pred_value_list.append(values)  
+            target_value_list.append(target_values)
+
+    pred_value_list = torch.cat(pred_value_list, dim=1)
+    target_value_list = torch.cat(target_value_list, dim=1)
+    return pred_value_list, target_value_list

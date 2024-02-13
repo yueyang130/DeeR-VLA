@@ -233,7 +233,6 @@ class FCDecoder(ActionDecoder):
         if fusion_mode == 'two_way':
             in_features *= 2
         
-        self.return_feature = return_feature
         self.in_features = in_features
         self.out_features = out_features
         self.window_size = window_size
@@ -377,7 +376,7 @@ class DeterministicDecoder(ActionDecoder):
         return_feature=False,
         with_gripper_logits=False,
     ):
-        
+        self.return_feature = return_feature
     
         # reshape
         if input_feature.dim() == 3: # (bs * action_seq_len, lang_len, d)
@@ -570,6 +569,8 @@ class GaussianDecoder(ActionDecoder):
         with_gripper_logits=False,
     ):
         assert deterministic ^ (act is not None)
+        
+        self.return_feature = return_feature
         
         # reshape
         if input_feature.dim() == 3: # (bs * action_seq_len, lang_len, d)

@@ -252,6 +252,19 @@ class MPTFlamingo(nn.Module):
                 exit.window_size = new_window_size
         return window_size
     
+    def clear_all_exit_memory(self):
+        if self.sep_lm_head:
+            self.lm_head.hidden_state = None
+            self.lm_head.history_memory = []
+        else:
+            self.lang_encoder.lm_head.hidden_state = None
+            self.lang_encoder.lm_head.history_memory = []
+            
+        if len(self.lm_exits) > 0:
+            for exit in self.lm_exit_modules:
+                exit.hidden_state = None
+                exit.history_memory = []
+    
     def forward(
         self,
         vision_x: torch.Tensor,
@@ -271,6 +284,7 @@ class MPTFlamingo(nn.Module):
         with_gripper_logits=False,
         exit_id=None,
         dynamic_early_exit=False,
+        exit_controller=None,
     ):
         """
         Forward pass of Flamingo.
@@ -323,17 +337,25 @@ class MPTFlamingo(nn.Module):
                     elif self.fusion_mode == 'vit_concat':
                         self._encode_history_vision_fc_post(vision_x, vision_gripper)
         
-        if dynamic_early_exit == True:
-            raise NotImplementedError
-        
-        output = self.lang_encoder(
-            input_ids=lang_x,
-            attention_mask=attention_mask.bool(),
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            output_hidden_states=True,
-            exit_id=exit_id,
-        )
+        if dynamic_early_exit and exit_controller is not None:
+            output = self.lang_encoder(
+                input_ids=lang_x,
+                attention_mask=attention_mask.bool(),
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                output_hidden_states=True,
+                exit_controller = exit_controller,
+            )
+        else:
+            # when exit_id is None, it behaves as the static LLM forward
+            output = self.lang_encoder(
+                input_ids=lang_x,
+                attention_mask=attention_mask.bool(),
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                output_hidden_states=True,
+                exit_id=exit_id,
+            )
         
         def get_action(head, in_feat, in_state):
             if isinstance(head, GaussianDecoder):
@@ -343,6 +365,9 @@ class MPTFlamingo(nn.Module):
             return o
         
         # inference: only output one specified exit
+        if dynamic_early_exit and exit_controller is not None:
+            exit_id = output.exit_layer
+        # exit with exit id (speficfied by dynamic exit or munual set)
         if exit_id is not None: 
             if exit_id < 0:
                 exit_id += self.lang_encoder.config.n_layers
@@ -355,9 +380,6 @@ class MPTFlamingo(nn.Module):
             exit_action_output = get_action(exit_head, output.hidden_states[exit_id], state_tensor)
             output.logits = exit_action_output
             return output
-        
-        if dynamic_early_exit:
-            raise NotImplementedError
         
         # training: output all exits
         last_feat = output.hidden_states[-1]

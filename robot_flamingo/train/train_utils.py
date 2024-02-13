@@ -66,6 +66,7 @@ def save_value_net_ckpt(args, ddp_value_net, optimizer, lr_scheduler, epoch, ste
     checkpoint_dict = {
         "epoch": epoch,
         "precision": args.precision,
+        "with_exit_embed": args.with_exit_embed,
         "model_state_dict": get_checkpoint(ddp_value_net),
         "optimizer_state_dict": optimizer.state_dict(),
         "lr_scheduler_state_dict": lr_scheduler.state_dict(),
@@ -1823,7 +1824,7 @@ def train_one_epoch(
             )
 
 
-def train_policy_one_epoch_calvin_multi_exit(
+def train_value_net_one_epoch_calvin_multi_exit(
     args,
     model,
     value_net,
