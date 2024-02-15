@@ -7,6 +7,8 @@ parser = argparse.ArgumentParser()
 
 # Add the arguments
 parser.add_argument('--ckpt_dir', type=str, help='The checkpoint directory')
+parser.add_argument('--value_net_ckpt_dir', type=str, help='The checkpoint directory')
+parser.add_argument('--exit_ratio', type=float, default=1.0, help='The checkpoint directory')
 parser.add_argument('--single_step', action='store_true', help='If set, evlauate in single step mode')
 parser.add_argument('--node_num', type=int)
 parser.add_argument(
@@ -25,7 +27,7 @@ ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
 ckpt_names = ckpt_names[:1]
 ckpt_names = [
-    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_data_0.5_aug_10_4_3_step_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
     
     # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
     # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
@@ -42,12 +44,16 @@ for ckpt_name in ckpt_names:
     use_gripper = 1 if 'gripper' in ckpt_name else 0
     use_state = 1 if 'state' in ckpt_name else 0
     ckpt_path = os.path.join(args.ckpt_dir, ckpt_name)
+    value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_4.pth')
     log_dir = f'log_{args.ckpt_dir}'
     os.makedirs(log_dir, exist_ok=True)
     prefix = 'evaluate'
     if args.amp:
         prefix += '_amp'
-    prefix += f'_{args.eval_exit_mode}_exit'
+    prefix += f'_{args.eval_exit_mode}'
+    if args.eval_exit_mode == 'dynamic':
+        prefix += f'_{args.exit_ratio}'
+    prefix += '_exit'
     prefix += f'_{args.multi_execution}_execution'
         
     log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
@@ -67,6 +73,6 @@ for ckpt_name in ckpt_names:
         window_size = int(ckpt_attrs[ckpt_attrs.index('ws')+1])
     # print('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state))
     # exit(0)
-    os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, 
-        use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode, args.multi_execution))
+    os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, 
+        use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode, args.multi_execution, value_net_ckpt_path, args.exit_ratio))
 

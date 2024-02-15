@@ -62,7 +62,7 @@ def main():
         "--logging_steps", type=int, default=100, help="log loss every n steps"
     )
     # Sum of gradient optimization batch size
-    parser.add_argument("--batch_size_calvin", type=int, default=1)
+    parser.add_argument("--batch_size_calvin", type=int, default=96)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--openflamingo_checkpoint", type=str, default="")
     parser.add_argument(
@@ -219,7 +219,8 @@ def main():
     parser.add_argument(
         "--data_percent", 
         type=float, 
-        default=1.0
+        default=0.1
+        # default=0.005
     )
     parser.add_argument(
         "--debug",

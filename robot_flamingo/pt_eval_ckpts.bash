@@ -4,7 +4,8 @@ export EVALUTION_ROOT=$(pwd)
 
 # !!! Set for your own path
 # calvin_dataset_path='calvin_data/task_ABCD_D'
-calvin_dataset_path='/mnt/bn/yueyang/archive/calvin/dataset/task_ABCD_D'
+# calvin_dataset_path='/mnt/bn/yueyang/archive/calvin/dataset/task_ABCD_D'
+calvin_dataset_path='/mnt/bn/yueyang/archive/calvin/dataset/task_D_D'
 # calvin_conf_path
 calvin_conf_path="/mnt/bn/yueyang/archive/calvin/calvin_models/conf"
 # language model path
@@ -24,6 +25,8 @@ amp=$9
 # eval_exit_mode=$10
 eval_exit_mode=${10}
 multi_execution=${11}
+value_net_ckpt=${12}
+exit_ratio=${13}
 export MESA_GL_VERSION_OVERRIDE=4.1
 echo logging to ${log_file}
 
@@ -53,7 +56,9 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --amp ${amp} \
     --eval_exit_mode ${eval_exit_mode} \
     --multi_execution ${multi_execution} \
-    --workers 1 > ${log_file} 2>&1
+    --value_net_ckpt ${value_net_ckpt} \
+    --exit_ratio ${exit_ratio} \
+    --workers 2 > ${log_file} 2>&1
 fi
 
 if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 0 ]
@@ -71,7 +76,9 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --amp ${amp} \
     --eval_exit_mode ${eval_exit_mode} \
     --multi_execution ${multi_execution} \
-    --workers 1 > ${log_file} 2>&1
+    --value_net_ckpt ${value_net_ckpt} \
+    --exit_ratio ${exit_ratio} \
+    --workers 4 > ${log_file} 2>&1
 fi
 
 if [ ${use_gripper} -eq 0 ] && [ ${use_state} -eq 0 ]
@@ -88,5 +95,7 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --amp ${amp} \
     --eval_exit_mode ${eval_exit_mode} \
     --multi_execution ${multi_execution} \
-    --workers 1 > ${log_file} 2>&1
+    --value_net_ckpt ${value_net_ckpt} \
+    --exit_ratio ${exit_ratio} \
+    --workers 2 > ${log_file} 2>&1
 fi

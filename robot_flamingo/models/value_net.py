@@ -221,10 +221,12 @@ class ExitController(torch.nn.Module):
 
         filtered = torch.zeros(n_sample)
         T = torch.Tensor(n_stage).fill_(-1e8) if self.leq else torch.Tensor(n_stage).fill_(1e8)
-        probs = exit_ratio ** torch.arange(1, self.num_exit) # n-1 (exclude the last exit)
+        probs = exit_ratio ** torch.arange(1, self.num_exit+1) # n (including the last exit)
+        probs[0] = 0.0
         probs /= probs.sum()
+        print('Expected early exit rate ', probs)
 
-        for k in range(n_stage - 1):
+        for k in range(n_stage - 1): # not include the last exit
             count = 0
             out_n = math.floor(n_sample * probs[k])
             for i in range(n_sample):
@@ -235,18 +237,25 @@ class ExitController(torch.nn.Module):
                         T[k] = pred_value_gathered[k][ori_idx]
                         break
             if self.leq:
-                # Don't use le (less or equal). Many samples with the same value are counted.
-                # filtered.add_(pred_value_gathered[k].le(T[k]).type_as(filtered))
-                filtered.add_(pred_value_gathered[k].less(T[k]).type_as(filtered))
+                filtered.add_(pred_value_gathered[k].le(T[k]).type_as(filtered))
+                # filtered.add_(pred_value_gathered[k].less(T[k]).type_as(filtered))
             else:
-                filtered.add_(pred_value_gathered[k].greater(T[k]).type_as(filtered))
+                filtered.add_(pred_value_gathered[k].ge(T[k]).type_as(filtered))
+                # filtered.add_(pred_value_gathered[k].greater(T[k]).type_as(filtered))
 
         if self.leq:
             T[n_stage - 1] = 1e8
         else:
             T[n_stage - 1] = -1e8
-  
+
         self.thresholds = T
+        if args.rank == 0:
+            print(f'Mean value for each layer:')
+            for i in range(n_stage):
+                print(f'{i+1} : {pred_value_gathered[i].mean():.5f}')
+            print(f'Find threshold on {n_sample} samples:')
+            for i in range(n_stage):
+                print(f'{i+1} : {T[i]:.5f}')
     
     @torch.no_grad()  
     def forward(self, x, i):
@@ -338,7 +347,7 @@ def generate_values(
         if args.fusion_mode == 'vit_concat':
             labels = labels[:, -1]
         labels = [labels[..., :6], (labels[..., 6:] + 1) // 2]
-
+        # print(f'{args.amp=}')
         with torch.cuda.amp.autocast(enabled=args.amp):
         # with torch.cuda.amp.autocast(enabled=False): # forbid float16 to avoid the loss of loss value accuray, which may results in many equal loss values.
             # get loss for each layer as target label
