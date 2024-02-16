@@ -435,6 +435,7 @@ def main():
     readout_args(args, checkpoint, 'early_exit_layer', -1)
     readout_args(args, checkpoint, "precision", 'fp32')
     readout_args(args, checkpoint, "multi_exit", False)
+    readout_args(args, checkpoint, "use_extra_exit", False)
     readout_args(args, checkpoint, "exit_interval", 1)
     readout_args(args, checkpoint, "exit_dropout", 0.0)
     

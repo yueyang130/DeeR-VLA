@@ -54,6 +54,8 @@ class MPTFlamingo(nn.Module):
         multi_exit=False,
         exit_interval=1,
         exit_dropout=0.0,
+        # for dynamic exit
+        use_extra_exit=False,
     ):
         """
         Args:
@@ -233,24 +235,35 @@ class MPTFlamingo(nn.Module):
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
             print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one infal exit!')      
 
+        # extra one exit
+        self.use_extra_exit = use_extra_exit
+        if use_extra_exit:
+            self.extra_exit = get_encoder()
+        
     def get_all_exit_idx(self):
+        # not include the extra exit
         return list(self.lm_exits.keys()) + [self.lang_encoder.config.n_layers - 1]
     
     def get_exit_num(self):
         return len(self.get_all_exit_idx())
     
     def set_all_exit_window_size(self, new_window_size):
+        # include the extra exit if it exists
         if self.sep_lm_head:
-            window_size = self.lm_head.window_size
+            old_window_size = self.lm_head.window_size
             self.lm_head.window_size = new_window_size
         else:
-            window_size = self.lang_encoder.lm_head.window_size
+            old_window_size = self.lang_encoder.lm_head.window_size
             self.lang_encoder.lm_head.window_size = new_window_size
         
         if len(self.lm_exits) > 0:
             for exit in self.lm_exit_modules:
                 exit.window_size = new_window_size
-        return window_size
+                
+        if self.use_extra_exit:
+            self.extra_exit.window_size = new_window_size
+                
+        return old_window_size
     
     def clear_all_exit_memory(self):
         if self.sep_lm_head:
@@ -264,6 +277,10 @@ class MPTFlamingo(nn.Module):
             for exit in self.lm_exit_modules:
                 exit.hidden_state = None
                 exit.history_memory = []
+        
+        if self.use_extra_exit:
+            self.extra_exit.hidden_state = None
+            self.extra_exit.history_memory = []
     
     def forward(
         self,
@@ -364,10 +381,10 @@ class MPTFlamingo(nn.Module):
                 o = head(in_feat, state_tensor=in_state, return_feature=return_feature, with_gripper_logits=with_gripper_logits)
             return o
         
-        # inference: only output one specified exit
+        # inference: only output action by one specified exit
         if dynamic_early_exit and exit_controller is not None:
             exit_id = output.exit_layer
-        # exit with exit id (speficfied by dynamic exit or munual set)
+        # exit with exit id (specified by dynamic exit or munual set)
         if exit_id is not None: 
             if exit_id < 0:
                 exit_id += self.lang_encoder.config.n_layers
@@ -381,8 +398,8 @@ class MPTFlamingo(nn.Module):
             output.logits = exit_action_output
             return output
         
-        # training: output all exits
-        last_feat = output.hidden_states[-1]
+        # training: output actions by all exits
+        last_feat = output.hidden_states[-1] # (bs * action_seq_len, lang_len, d)
         last_action_output = get_action(self.lm_head, last_feat, state_tensor)
         output.logits = last_action_output
         
@@ -392,8 +409,27 @@ class MPTFlamingo(nn.Module):
                 internal_feat = output.hidden_states[exit_layer]
                 exit_action_output = get_action(exit_head, internal_feat, state_tensor)
                 exit_outputs.append(exit_action_output)
-            return output, exit_outputs
-
+            
+        
+        if self.use_extra_exit:
+            # use features from varying layers as LSTM input
+            all_feats = torch.stack(output.hidden_states, dim=1) # (bs * action_seq_len, n_exit, lang_len, d)
+            # (bs * action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, n_exit, lang_len, d)
+            all_feats = all_feats.reshape(-1, self.window_size, *all_feats.shape[1:]) 
+            # (bs, action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, lang_len, d)
+            bs, action_seq_len, n_exit = all_feats.shape[:3]
+            rand_layer_indices = torch.randint(0, n_exit, size=(bs, action_seq_len, 1, 1, 1), device=all_feats.device)
+            rand_layer_indices = rand_layer_indices.expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
+            rand_layer_feat = torch.gather(all_feats, 2, rand_layer_indices).squeeze(2)     
+            # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
+            rand_layer_feat = rand_layer_feat.flatten(0, 1)
+            # cut off gradient. Loss is used only for training the extra exit, not the backbone.
+            rand_layer_feat = rand_layer_feat.detach()
+            extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
+            return output, exit_outputs, extra_exit_output
+        else:
+            if len(self.lm_exits) > 0:
+                return output, exit_outputs
         return output
         
     def _encode_vision_x(self, vision_x: torch.Tensor):

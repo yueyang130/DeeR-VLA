@@ -325,6 +325,7 @@ def main():
     parser.add_argument("--exit_lr_scale", type=float, default=1.0, help='scale learning rate for exits')
     parser.add_argument("--exit_dropout", type=float, default=0.0, help='')
     parser.add_argument("--exit_decay", action="store_true", default=False)
+    parser.add_argument("--use_extra_exit", action="store_true", default=False)
 
     args = parser.parse_args()
     
@@ -402,6 +403,7 @@ def main():
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
+        use_extra_exit=args.use_extra_exit,
     )
 
     checkpoint_path = args.openflamingo_checkpoint
@@ -455,7 +457,7 @@ def main():
             if not args.exit_decay:
                 apply_decay_bool = "gated_cross_attn_layer" in x
             else:
-                apply_decay_bool = ("gated_cross_attn_layer" in x) or ('lm_head' in x) or ('lm_exit_modules' in x)
+                apply_decay_bool = ("gated_cross_attn_layer" in x) or ('lm_head' in x) or ('lm_exit_modules' in x) or ('extra_exit' in x)
             return (
                 apply_decay_bool
                 and "ff_gate" not in x

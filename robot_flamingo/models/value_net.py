@@ -224,7 +224,7 @@ class ExitController(torch.nn.Module):
         probs = exit_ratio ** torch.arange(1, self.num_exit+1) # n (including the last exit)
         probs[0] = 0.0
         probs /= probs.sum()
-        print('Expected early exit rate ', probs)
+        if args.rank==0: print('Expected early exit rate ', probs)
 
         for k in range(n_stage - 1): # not include the last exit
             count = 0

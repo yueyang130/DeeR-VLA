@@ -41,6 +41,7 @@ def save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, step):
         "state_dependent_std": args.state_dependent_std,
         "early_exit_layer": args.early_exit_layer,
         "multi_exit": args.multi_exit,
+        "use_extra_exit": args.use_extra_exit,
         "exit_interval": args.exit_interval,
         "exit_weight": args.exit_weight,
         "exit_dropout": args.exit_dropout,
@@ -101,6 +102,8 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'multi-exit_'
         ckpt_name += args.exit_weight
         ckpt_name += '_interval={}_'.format(args.exit_interval)
+    if args.use_extra_exit:
+        ckpt_name += 'extra-exit_'
     if args.exit_lr_scale != 1.0:
         ckpt_name += 'lr_scale={}_'.format(args.exit_lr_scale)
     if args.exit_dropout != 0:
@@ -183,13 +186,17 @@ def get_ckpt_name_pattern(args):
     ckpt_name += '*.pth'
     return ckpt_name
 
-def get_exit_weights(weight_mode, num, device):
+def get_exit_weights(weight_mode, num, use_extra_exit, device):
     if weight_mode == 'uniform':
         weight = torch.ones(num, dtype=torch.float32, device=device)
     elif weight_mode == 'ascending':
         weight = torch.arange(1, num+1, dtype=torch.float32, device=device)
     elif weight_mode == 'descending':
         weight = torch.arange(num+1, 1, step=-1, dtype=torch.float32, device=device)
+        
+    if use_extra_exit:
+        extra_weight = weight[:num-1].mean()
+        weight[num-1] = extra_weight
     weight = weight / weight.sum()
     return weight
 
@@ -872,7 +879,7 @@ def train_one_epoch_calvin_multi_exit(
 
         with autocast():
             if args.head_type == 'deterministic':
-                final_output, exit_outputs = model(
+                o = model(
                     vision_x=images,
                     lang_x=input_ids,
                     attention_mask=attention_mask,
@@ -882,8 +889,13 @@ def train_one_epoch_calvin_multi_exit(
                     with_gripper_logits=True,
                 )
                 
-                # get joint outputs
-                all_outputs = exit_outputs + [final_output.logits]
+                if args.use_extra_exit:
+                    final_output, exit_outputs, extra_exit_output = o[0], o[1], o[2]
+                    all_outputs = exit_outputs + [final_output.logits] + [extra_exit_output]
+                else:
+                    final_output, exit_outputs = o[0], o[1]
+                    # get joint outputs
+                    all_outputs = exit_outputs + [final_output.logits]
                 
                 num_action_list, gripper_logit_list = [], []
                 for output in all_outputs:
@@ -942,7 +954,7 @@ def train_one_epoch_calvin_multi_exit(
             # get mean for every exit
             dim = loss_calvin.dim()
             loss_calvin = loss_calvin.mean(dim=tuple(range(1, dim)))
-            weights = get_exit_weights(args.exit_weight, len(all_outputs), device=loss_calvin.device)
+            weights = get_exit_weights(args.exit_weight, len(all_outputs), args.use_extra_exit, device=loss_calvin.device)
             loss_calvin *= weights
             loss_calvin = loss_calvin.sum() # since weights are normalzied, thus sum losses of all exits
              
@@ -954,8 +966,17 @@ def train_one_epoch_calvin_multi_exit(
             )
             
         #### LOG #####
-        loss_calvin_bin_list = loss_calvin_bin.mean(dim=tuple(range(1, dim)))
-        loss_calvin_num_list = loss_calvin_num.mean(dim=tuple(range(1, dim)))
+        if args.use_extra_exit:
+            loss_calvin_bin_list = loss_calvin_bin[:-1].mean(dim=tuple(range(1, dim)))
+            loss_calvin_num_list = loss_calvin_num[:-1].mean(dim=tuple(range(1, dim)))
+            extra_exit_loss_bin = loss_calvin_bin[-1].mean()
+            extra_exit_loss_num = loss_calvin_num[-1].mean()
+        else:
+            loss_calvin_bin_list = loss_calvin_bin.mean(dim=tuple(range(1, dim)))
+            loss_calvin_num_list = loss_calvin_num.mean(dim=tuple(range(1, dim)))
+            extra_exit_loss_bin = torch.tensor([.0])
+            extra_exit_loss_num = torch.tensor([.0])
+        
             
         mv_avg_loss.append(loss.item())
         
@@ -1034,6 +1055,8 @@ def train_one_epoch_calvin_multi_exit(
                         "loss_calvin_num": loss_calvin_num.mean().item(),
                         **{f"loss_calvin_bin_{i}": x.item() for i, x in enumerate(loss_calvin_bin_list)},
                         **{f"loss_calvin_num_{i}": x.item() for i, x in enumerate(loss_calvin_num_list)},
+                        "extra_exit_loss_bin": extra_exit_loss_bin.item(),
+                        "extra_exit_loss_num": extra_exit_loss_num.item(),
                         "mse": loss_mse.item(),
                         "mle": loss_mle.item(),
                         "mean_std": std.mean().item(),
