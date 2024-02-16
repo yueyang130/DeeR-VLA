@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
-from train_utils import get_checkpoint, train_value_net_one_epoch_calvin_multi_exit, get_ckpt_name, save_value_net_ckpt
+from train_utils import get_checkpoint, train_value_net_one_epoch_calvin_multi_exit, train_value_net_one_epoch_calvin_dynamic_exit, save_value_net_ckpt
 from robot_flamingo.eval.eval_utils import check_loaded_parameters
 from torch.distributed.elastic.multiprocessing.errors import record
 from transformers import (
@@ -414,6 +414,7 @@ def main():
     readout_args(args, checkpoint, 'early_exit_layer', -1)
     # readout_args(args, checkpoint, "precision", 'fp32')
     readout_args(args, checkpoint, "multi_exit", False)
+    readout_args(args, checkpoint, "use_extra_exit", False)
     readout_args(args, checkpoint, "exit_interval", 1)
     readout_args(args, checkpoint, "exit_dropout", 0.0)
     
@@ -459,6 +460,7 @@ def main():
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
+        use_extra_exit=args.use_extra_exit,
     )
 
     checkpoint_path = args.openflamingo_checkpoint
@@ -575,18 +577,32 @@ def main():
             raise NotImplementedError
         else:
             if args.multi_exit:
-                train_value_net_one_epoch_calvin_multi_exit(
-                    args=args,
-                    model=ddp_model,
-                    value_net=ddp_value_net,
-                    epoch=epoch,
-                    tokenizer=tokenizer,
-                    optimizer=optimizer,
-                    lr_scheduler=lr_scheduler,
-                    calvin_loader=calvin_loader,
-                    device_id=device_id,
-                    wandb=wandb,
-                )
+                if args.use_extra_exit:
+                    train_value_net_one_epoch_calvin_dynamic_exit(
+                        args=args,
+                        model=ddp_model,
+                        value_net=ddp_value_net,
+                        epoch=epoch,
+                        tokenizer=tokenizer,
+                        optimizer=optimizer,
+                        lr_scheduler=lr_scheduler,
+                        calvin_loader=calvin_loader,
+                        device_id=device_id,
+                        wandb=wandb,
+                    )
+                else:
+                    train_value_net_one_epoch_calvin_multi_exit(
+                        args=args,
+                        model=ddp_model,
+                        value_net=ddp_value_net,
+                        epoch=epoch,
+                        tokenizer=tokenizer,
+                        optimizer=optimizer,
+                        lr_scheduler=lr_scheduler,
+                        calvin_loader=calvin_loader,
+                        device_id=device_id,
+                        wandb=wandb,
+                    )
             else:
                 raise NotImplementedError
 

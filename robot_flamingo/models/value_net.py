@@ -222,7 +222,7 @@ class ExitController(torch.nn.Module):
         filtered = torch.zeros(n_sample)
         T = torch.Tensor(n_stage).fill_(-1e8) if self.leq else torch.Tensor(n_stage).fill_(1e8)
         probs = exit_ratio ** torch.arange(1, self.num_exit+1) # n (including the last exit)
-        probs[0] = 0.0
+        # probs[0] = 0.0
         probs /= probs.sum()
         if args.rank==0: print('Expected early exit rate ', probs)
 
@@ -348,10 +348,60 @@ def generate_values(
             labels = labels[:, -1]
         labels = [labels[..., :6], (labels[..., 6:] + 1) // 2]
         # print(f'{args.amp=}')
-        with torch.cuda.amp.autocast(enabled=args.amp):
-        # with torch.cuda.amp.autocast(enabled=False): # forbid float16 to avoid the loss of loss value accuray, which may results in many equal loss values.
-            # get loss for each layer as target label
-            with torch.no_grad():
+        if args.use_extra_exit:
+            with torch.cuda.amp.autocast(enabled=args.amp), torch.no_grad():
+                if args.head_type == 'deterministic':
+                    o = model(
+                        vision_x=images,
+                        lang_x=input_ids,
+                        attention_mask=attention_mask,
+                        # labels=labels,  # loss计算放在外面
+                        vision_gripper=gripper,
+                        state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                        with_gripper_logits=True,
+                        return_in_feat=True,
+                    )
+                    # only need extra exit loss
+                    extra_exit_output = o[2]
+                    features = o[3]
+                    num_actions, bin_gripper = extra_exit_output[0], extra_exit_output[1]
+                    bin_actions, bin_logits = bin_gripper
+                    if args.multi_step_action != 1:
+                        bs, seq_len = num_actions.shape[:2]
+                        num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                        # bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                        bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
+                    loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0], reduction='none').mean(-1)
+                    
+                    loss_mse = loss_calvin_num.mean()
+                    loss_mle = torch.tensor([.0])
+                    std = torch.tensor([.0])
+                elif args.head_type == 'gaussian':
+                    raise NotImplementedError("Please fix the bug in gaussian policy in single exit before running multi-exit gaussian policy!")
+
+                # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
+                bin_targets = labels[1]
+                loss_calvin_bin = torch.nn.functional.binary_cross_entropy_with_logits(bin_logits, bin_targets, reduction='none').mean(-1)
+                # print(f'{loss_calvin_num.shape=}')
+                
+                # loss for each layer and each sample
+                if args.head_type == 'deterministic':
+                    if args.real_data:
+                        loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
+                    else:
+                        loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
+                elif args.head_type == 'gaussian':
+                    loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
+                loss_calvin *= args.loss_multiplier_calvin
+                
+                values = value_net(features).squeeze(-1) # (bs * seq_len, lang_len, 1) -> (bs, seq_len)
+                target_values = loss_calvin.detach()
+
+                pred_value_list = torch.cat(pred_value_list, dim=0)
+                target_value_list = torch.cat(target_value_list, dim=0)
+        
+        else:
+            with torch.cuda.amp.autocast(enabled=args.amp), torch.no_grad():
                 if args.head_type == 'deterministic':
                     final_output, exit_outputs = model(
                         vision_x=images,
@@ -421,16 +471,15 @@ def generate_values(
                 #         m.weight.grad = m.weight.grad * zero_mask
                 # model.apply(mask_embedding)
 
-            # train value net
-            features = torch.stack(final_output.hidden_states, dim=0) 
-            values = value_net(features) # (exits, bs * seq_len, lang_len, 1) -> (exits * bs, seq_len, 1)
-            values = values.reshape(len(all_outputs), -1, values.shape[1]) # (exits, bs, seq_len, 1)
-            target_values = loss_calvin.detach()
+                features = torch.stack(final_output.hidden_states, dim=0) 
+                values = value_net(features) # (exits, bs * seq_len, lang_len, 1) -> (exits * bs, seq_len, 1)
+                values = values.reshape(len(all_outputs), -1, values.shape[1]) # (exits, bs, seq_len, 1)
+                target_values = loss_calvin.detach()
             
-            # record
-            pred_value_list.append(values)  
-            target_value_list.append(target_values)
+        # record
+        pred_value_list.append(values)  
+        target_value_list.append(target_values)
 
-    pred_value_list = torch.cat(pred_value_list, dim=1)
-    target_value_list = torch.cat(target_value_list, dim=1)
+        pred_value_list = torch.cat(pred_value_list, dim=1)
+        target_value_list = torch.cat(target_value_list, dim=1)
     return pred_value_list, target_value_list

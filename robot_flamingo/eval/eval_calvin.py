@@ -483,6 +483,7 @@ def main():
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
+        use_extra_exit=args.use_extra_exit,
     )
     checkpoint_path = args.openflamingo_checkpoint
     print("Loading origin flamingo checkpoint from ", checkpoint_path)

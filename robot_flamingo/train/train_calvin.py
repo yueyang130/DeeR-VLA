@@ -467,7 +467,7 @@ def main():
             )
 
         def apply_lr_scale(n, p):
-            if 'lm_head' in n or 'lm_exit_modules' in n:
+            if 'lm_head' in n or 'lm_exit_modules' in n or 'extra_exit' in n:
                 lr_scale = args.exit_lr_scale
             else:
                 lr_scale = 1.0

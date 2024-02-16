@@ -302,6 +302,7 @@ class MPTFlamingo(nn.Module):
         exit_id=None,
         dynamic_early_exit=False,
         exit_controller=None,
+        return_in_feat=False,
     ):
         """
         Forward pass of Flamingo.
@@ -389,10 +390,14 @@ class MPTFlamingo(nn.Module):
             if exit_id < 0:
                 exit_id += self.lang_encoder.config.n_layers
             assert 0 <= exit_id < self.lang_encoder.config.n_layers
-            if exit_id == self.lang_encoder.config.n_layers - 1:
-                exit_head = self.lm_head
+            if self.use_extra_exit:
+                # only use the extra exit for inference
+                exit_head = self.extra_exit
             else:
-                exit_head = self.lm_exits[exit_id]
+                if exit_id == self.lang_encoder.config.n_layers - 1:
+                    exit_head = self.lm_head
+                else:
+                    exit_head = self.lm_exits[exit_id]
             assert len(output.hidden_states) == exit_id + 1
             exit_action_output = get_action(exit_head, output.hidden_states[exit_id], state_tensor)
             output.logits = exit_action_output
@@ -426,7 +431,11 @@ class MPTFlamingo(nn.Module):
             # cut off gradient. Loss is used only for training the extra exit, not the backbone.
             rand_layer_feat = rand_layer_feat.detach()
             extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
-            return output, exit_outputs, extra_exit_output
+            output.in_feat = rand_layer_feat # for training value net
+            if return_in_feat:
+                return output, exit_outputs, extra_exit_output, rand_layer_feat
+            else:
+                return output, exit_outputs, extra_exit_output
         else:
             if len(self.lm_exits) > 0:
                 return output, exit_outputs

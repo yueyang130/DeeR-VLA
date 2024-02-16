@@ -7,7 +7,7 @@ parser = argparse.ArgumentParser()
 
 # Add the arguments
 parser.add_argument('--ckpt_dir', type=str, help='The checkpoint directory')
-parser.add_argument('--value_net_ckpt_dir', type=str, help='The checkpoint directory')
+parser.add_argument('--value_net_ckpt_dir', type=str, default='', help='The checkpoint directory')
 parser.add_argument('--exit_ratio', type=float, default=1.0, help='The checkpoint directory')
 parser.add_argument('--single_step', action='store_true', help='If set, evlauate in single step mode')
 parser.add_argument('--node_num', type=int)
@@ -27,7 +27,10 @@ ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
 ckpt_names = ckpt_names[:1]
 ckpt_names = [
-    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
     
     # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
     # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',

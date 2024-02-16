@@ -280,8 +280,9 @@ class ModelWrapper(CalvinBaseModel):
         self.model.module.clear_all_exit_memory()
         
         # LSTM value net
-        self.exit_controller.module.value_net.hidden_state = None
-        self.exit_controller.module.value_net.history_memory = []
+        if self.exit_controller is not None:
+            self.exit_controller.module.value_net.hidden_state = None
+            self.exit_controller.module.value_net.history_memory = []
 
     def step(self, obs, goal, get_action=True,):
         """
@@ -585,7 +586,7 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
                 " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(count_success(results))]) + "|"
             )
             layer_ratio = count_exit_ratio(merge_multi_list(exit_layers_list), n_layer)
-            print(" ".join([f"{i + 1}/{n_layer} : {v * 100:.1f}% |" for i, v in enumerate(layer_ratio)]) + "|")
+            print("\n" + " ".join([f"{i + 1}/{n_layer} : {v * 100:.1f}% |" for i, v in enumerate(layer_ratio)]) + "|")
         local_sequence_i += 1
 
     def extract_iter_from_tqdm(tqdm_iter):
@@ -725,12 +726,19 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
         hist_len = args.pad_length
     
     if args.eval_exit_mode == 'last':    
+        if args.rank == 0: 
+            if args.use_extra_exit:
+                print("\nEvaluate the extra exit with features from the last layer !\n")
         wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1, multi_execution=args.multi_execution)
         evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
         
     elif args.eval_exit_mode == 'all':
         torch.distributed.barrier()
-        if args.rank == 0: print("\nEvaluate all exits by numerical order!\n")
+        if args.rank == 0: 
+            if args.use_extra_exit:
+                print("\nEvaluate the extra exit with features from a fixed layer (i=0,1,2,..) !\n")
+            else:
+                print("\nEvaluate all exits by numerical order!\n")
         for exit_id in model.module.get_all_exit_idx():
             if args.rank == 0: print('#'*40 + '\n' + f'Evaluate the exit with exit_id={exit_id}!\n' + '#'*40 + '\n')
             wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id, multi_execution=args.multi_execution)
