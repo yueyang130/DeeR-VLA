@@ -156,8 +156,9 @@ class LSTMValueHead(nn.Module):
         if not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase):
             if input_feature.shape[1] == 1:  # the first frame of an action sequence
                 # infernece
-                self.tmp_input_feature = input_feature
-                if len(self.history_memory) <= self.history_len:
+                self.tmp_input_feature = input_feature # used for inference when len <= window_size
+                tmp_history_memory = self.history_memory + [input_feature] # used for inference when len > window_size
+                if len(tmp_history_memory) <= self.history_len:
                     # print('cur hist_mem len: {}'.format(len(self.history_memory)))
                     x, h_n = self.rnn(input_feature, self.hidden_state)
                     self.tmp_hidden_state = h_n
@@ -166,11 +167,11 @@ class LSTMValueHead(nn.Module):
                 else:
                     # the hidden state need to be refreshed based on the history window
                     # print('hist_mem exceeded, refresh hidden state')
-                    cur_len = len(self.history_memory)
+                    cur_len = len(tmp_history_memory)
                     for _ in range(cur_len - self.history_len):
-                        self.history_memory.pop(0)
-                    assert len(self.history_memory) == self.history_len
-                    hist_feature = torch.cat(self.history_memory, dim=1)
+                        tmp_history_memory.pop(0)
+                    assert len(tmp_history_memory) == self.history_len
+                    hist_feature = torch.cat(tmp_history_memory, dim=1)
                     self.hidden_state = None
                     x, h_n = self.rnn(hist_feature, self.hidden_state)
                     x = x[:, -1].unsqueeze(1)
@@ -196,25 +197,26 @@ class ExitController(torch.nn.Module):
         self.thresholds = None
         self.leq = leq
         self.num_exit = num_exit
+        # for debug
+        self.history_values = [[] for i in range(num_exit)]
         
-    def set_threshold(self, args, model, dataloader, exit_ratio):   
-        device_id = torch.distributed.get_rank()
-        num_devices = torch.distributed.get_world_size()
-        pred_value_list, target_value_list = generate_values(args, model, self.value_net, dataloader, device_id=device_id)
-    
-        # Initialize tensors to hold the gathered data
-        pred_value_gathered = [torch.zeros_like(pred_value_list) for _ in range(num_devices)]
-        target_value_gathered = [torch.zeros_like(target_value_list) for _ in range(num_devices)]
+    def set_threshold(self, args, model, dataloader, exit_ratio, values=None):  
+        if values is None:  
+            device_id = torch.distributed.get_rank()
+            num_devices = torch.distributed.get_world_size()
+            pred_value_list, target_value_list = generate_values(args, model, self.value_net, dataloader, device_id=device_id)
 
-        # Gather data
-        torch.distributed.all_gather(pred_value_gathered, pred_value_list)
-        torch.distributed.all_gather(target_value_gathered, target_value_list)
-        pred_value_gathered = torch.cat(pred_value_gathered, dim=1)
-        target_value_gathered = torch.cat(target_value_gathered, dim=1)
-        
-        # flatten bs and action length
-        pred_value_gathered = pred_value_gathered.flatten(1, 2)
-        target_value_gathered = target_value_gathered.flatten(1, 2)
+            # Initialize tensors to hold the gathered data
+            pred_value_gathered = [torch.zeros_like(pred_value_list) for _ in range(num_devices)]
+            # target_value_gathered = [torch.zeros_like(target_value_list) for _ in range(num_devices)]
+
+            # Gather data
+            torch.distributed.all_gather(pred_value_gathered, pred_value_list)
+            # torch.distributed.all_gather(target_value_gathered, target_value_list)
+            pred_value_gathered = torch.cat(pred_value_gathered, dim=1)
+            # target_value_gathered = torch.cat(target_value_gathered, dim=1)
+        else:
+            pred_value_gathered = values
             
         n_stage, n_sample = pred_value_gathered.size() # (exit, bs * seq_length)
         _, sorted_idx = pred_value_gathered.sort(dim=1, descending=not self.leq)
@@ -247,29 +249,45 @@ class ExitController(torch.nn.Module):
             T[n_stage - 1] = 1e8
         else:
             T[n_stage - 1] = -1e8
+        
+        # verify
+        # count = [0]
+        # filtered = torch.zeros(n_sample)
+        # for k in range(n_stage):
+        #     filtered += pred_value_gathered[k] < T[k]
+        #     count.append((filtered>0).sum()-sum(count))
+        # percent = [c / sum(count) for c in count[1:]]    
 
         self.thresholds = T
         if args.rank == 0:
             print(f'Mean value for each layer:')
             for i in range(n_stage):
-                print(f'{i+1} : {pred_value_gathered[i].mean():.5f}')
+                print(f'{i+1} : {pred_value_gathered[i].mean():.5f}, {pred_value_gathered[i].std():.5f}')
             print(f'Find threshold on {n_sample} samples:')
             for i in range(n_stage):
                 print(f'{i+1} : {T[i]:.5f}')
-    
+        return pred_value_gathered
+                
+
     @torch.no_grad()  
     def forward(self, x, i):
         assert self.thresholds is not None, "Please set thresholds before calling forward"
         
         value = self.value_net(x)
+        
+        # self.history_values[i].append(value)
+        # if torch.distributed.get_rank() == 0:
+        #     total = sum(len(h) for h in self.history_values)
+        #     if total > 0 and total % 100 == 0:
+        #         for layer, h in enumerate(self.history_values):
+        #             print(f'{layer=}, count={len(h)}, mean value = {torch.tensor(h).mean():.5f}')
+        
         if bool(value <= self.thresholds[i]) is self.leq: # both be true or both be false
             # Already find the dynamic exit. We need to update hidden state
             self.value_net.update_memory()
             return True 
         else:
             return False
-        
-
 
 @torch.no_grad()
 def generate_values(
@@ -279,6 +297,7 @@ def generate_values(
     calvin_loader,
     device_id,
 ):
+    
     num_batches_per_epoch_calvin = calvin_loader.num_batches
     num_batches_per_epoch = num_batches_per_epoch_calvin
 
@@ -360,45 +379,53 @@ def generate_values(
                         state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
                         with_gripper_logits=True,
                         return_in_feat=True,
+                        only_extra_exit=True,
                     )
                     # only need extra exit loss
-                    extra_exit_output = o[2]
+                    # extra_exit_output = o[2]
                     features = o[3]
-                    num_actions, bin_gripper = extra_exit_output[0], extra_exit_output[1]
-                    bin_actions, bin_logits = bin_gripper
-                    if args.multi_step_action != 1:
-                        bs, seq_len = num_actions.shape[:2]
-                        num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
-                        # bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
-                        bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
-                    loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0], reduction='none').mean(-1)
+                #     num_actions, bin_gripper = extra_exit_output[0], extra_exit_output[1]
+                #     bin_actions, bin_logits = bin_gripper
+                #     if args.multi_step_action != 1:
+                #         bs, seq_len = num_actions.shape[:2]
+                #         num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                #         # bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                #         bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
+                #     loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0], reduction='none').mean(-1)
                     
-                    loss_mse = loss_calvin_num.mean()
-                    loss_mle = torch.tensor([.0])
-                    std = torch.tensor([.0])
-                elif args.head_type == 'gaussian':
-                    raise NotImplementedError("Please fix the bug in gaussian policy in single exit before running multi-exit gaussian policy!")
+                #     loss_mse = loss_calvin_num.mean()
+                #     loss_mle = torch.tensor([.0])
+                #     std = torch.tensor([.0])
+                # elif args.head_type == 'gaussian':
+                #     raise NotImplementedError("Please fix the bug in gaussian policy in single exit before running multi-exit gaussian policy!")
 
-                # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
-                bin_targets = labels[1]
-                loss_calvin_bin = torch.nn.functional.binary_cross_entropy_with_logits(bin_logits, bin_targets, reduction='none').mean(-1)
-                # print(f'{loss_calvin_num.shape=}')
+                # # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
+                # bin_targets = labels[1]
+                # loss_calvin_bin = torch.nn.functional.binary_cross_entropy_with_logits(bin_logits, bin_targets, reduction='none').mean(-1)
+                # # print(f'{loss_calvin_num.shape=}')
                 
-                # loss for each layer and each sample
-                if args.head_type == 'deterministic':
-                    if args.real_data:
-                        loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
-                    else:
-                        loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
-                elif args.head_type == 'gaussian':
-                    loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
-                loss_calvin *= args.loss_multiplier_calvin
+                # # loss for each layer and each sample
+                # if args.head_type == 'deterministic':
+                #     if args.real_data:
+                #         loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
+                #     else:
+                #         loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
+                # elif args.head_type == 'gaussian':
+                #     loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
+                # loss_calvin *= args.loss_multiplier_calvin
+                action_seq_len, exit_num, bs = features.shape[:3]  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
+                features = features.flatten(2, 3).flatten(0, 1)
+                values = value_net(features).squeeze(-1) # (action_seq_len * exits, bs * seq_len, lang_len, d) -> (action_seq_len * exits * bs, seq_len)
+                values = values.reshape(action_seq_len, exit_num, bs, action_seq_len)
+                value_list = [values[i, :, :, i:i+1]  for i in range(action_seq_len)] # action_seq_len * (exit_num, bs, 1)
+                values = torch.cat(value_list, dim=2) #  (exit_num, bs, action_seq_len)
                 
-                values = value_net(features).squeeze(-1) # (bs * seq_len, lang_len, 1) -> (bs, seq_len)
-                target_values = loss_calvin.detach()
-
-                pred_value_list = torch.cat(pred_value_list, dim=0)
-                target_value_list = torch.cat(target_value_list, dim=0)
+                if args.rank==0:
+                    for i in range(action_seq_len):
+                        print(f'Timestep {i+1} mean value {values[:, :, i].mean():.5f}')
+                
+                # remove few timesteps at beginning because they have statistically larger loss
+                values = values[:, :, 4:] 
         
         else:
             with torch.cuda.amp.autocast(enabled=args.amp), torch.no_grad():
@@ -473,13 +500,18 @@ def generate_values(
 
                 features = torch.stack(final_output.hidden_states, dim=0) 
                 values = value_net(features) # (exits, bs * seq_len, lang_len, 1) -> (exits * bs, seq_len, 1)
-                values = values.reshape(len(all_outputs), -1, values.shape[1]) # (exits, bs, seq_len, 1)
+                values = values.reshape(len(all_outputs), -1, values.shape[1]) # (exits, bs, seq_len)
                 target_values = loss_calvin.detach()
             
         # record
         pred_value_list.append(values)  
-        target_value_list.append(target_values)
+        # target_value_list.append(target_values)
 
-        pred_value_list = torch.cat(pred_value_list, dim=1)
-        target_value_list = torch.cat(target_value_list, dim=1)
-    return pred_value_list, target_value_list
+
+    pred_value_list = torch.cat(pred_value_list, dim=1)
+    # target_value_list = torch.cat(target_value_list, dim=1)
+    # flatten bs and action length
+    pred_value_list = pred_value_list.flatten(1, 2)
+        
+    # return pred_value_list, target_value_list
+    return pred_value_list, None

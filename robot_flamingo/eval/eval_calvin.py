@@ -62,7 +62,7 @@ def main():
         "--logging_steps", type=int, default=100, help="log loss every n steps"
     )
     # Sum of gradient optimization batch size
-    parser.add_argument("--batch_size_calvin", type=int, default=96)
+    parser.add_argument("--batch_size_calvin", type=int, default=32)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--openflamingo_checkpoint", type=str, default="")
     parser.add_argument(
@@ -88,6 +88,14 @@ def main():
         "--calvin_dataset",
         type=str,
         help="path to calvin_dataset",
+    )
+    
+    
+    parser.add_argument(
+        "--validation_set",
+        default=False,
+        action="store_true",
+        help="use validation set for finding threshold",
     )
     parser.add_argument("--loss_multiplier_calvin", type=float, default=1.0)
     parser.add_argument("--warmup_steps", default=5000, type=int)
@@ -323,12 +331,13 @@ def main():
     # dynamic early-exit
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
     parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
-    
+    parser.add_argument("--load_threshold", default=1, type=int)
     
     args = parser.parse_args()
     
     print(f'{args.amp=}')
     print(f'{args.eval_exit_mode=}')
+    print(f'{args.load_threshold=}')
     
     args.real_data = True if 'real' in args.evaluate_from_checkpoint else False
     # Search for the pattern in args.evaluate_from_checkpoint
@@ -564,6 +573,18 @@ def main():
             calvin_dataset = get_data(args, image_processor, tokenizer, "calvin")
         calvin_dataset.set_epoch(0)
         calvin_loader = calvin_dataset.dataloader
+        
+        # find threshold
+        values = value_net_ckpt["values"] if "values" in value_net_ckpt else None
+        if args.load_threshold and values is not None:
+            print(f'load values for threshold')
+            ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, values)
+        else:
+            values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio)
+            value_net_ckpt["values"] = values
+            if args.rank==0: print("save new values for threshold to value net ckpt.")
+            torch.save(value_net_ckpt, args.value_net_ckpt)
+        
     else:
         ddp_exit_controller = None
         calvin_loader = None

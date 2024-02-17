@@ -585,8 +585,7 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
             eval_sequences.set_description(
                 " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(count_success(results))]) + "|"
             )
-            layer_ratio = count_exit_ratio(merge_multi_list(exit_layers_list), n_layer)
-            print("\n" + " ".join([f"{i + 1}/{n_layer} : {v * 100:.1f}% |" for i, v in enumerate(layer_ratio)]) + "|")
+            print("")
         local_sequence_i += 1
 
     def extract_iter_from_tqdm(tqdm_iter):
@@ -632,6 +631,11 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
         else:
             success, exit_layers = rollout(env, model, task_checker, subtask, val_annotations, plans, debug, eval_log_dir, subtask_i, sequence_i,diverse_inst=diverse_inst)
         exit_layers_list.append(exit_layers)
+        
+        n_layer = model.model.module.lang_encoder.config.n_layers
+        layer_ratio = count_exit_ratio(exit_layers, n_layer)
+        print(("(success) " if success else "(fail) ") +  " ".join([f"{i + 1}/{n_layer} : {v * 100:.1f}% |" for i, v in enumerate(layer_ratio)]) + "|")
+        
         if success:
             success_counter += 1
         else:
@@ -748,7 +752,6 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
     elif args.eval_exit_mode == 'dynamic':
         if args.rank == 0: print("\nEvaluate with dynamic exit!\n")
         wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, early_exit=True, exit_controller=exit_controller, multi_execution=args.multi_execution)
-        exit_controller.module.set_threshold(args, model, dataloader, args.exit_ratio)
         evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
 
     else:

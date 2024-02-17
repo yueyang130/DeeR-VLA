@@ -1070,8 +1070,9 @@ def get_calvin_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     )
     preprocess_text_fn = functools.partial(preprocess_text_calvin, tokenizer=tokenizer)
 
+    dataset_dir = Path(dataset_path) / ("training" if not args.validation_set else "validation")
     calvin_dataset = DiskCalvinDataset(
-        datasets_dir=Path(dataset_path) / "training",
+        datasets_dir=dataset_dir,
         image_fn=preprocess_image_fn,
         text_fn=preprocess_text_fn,
         window_size=args.window_size,
@@ -1090,7 +1091,7 @@ def get_calvin_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     round_fn = math.floor if floor else math.ceil
 
     num_samples = len(calvin_dataset)
-    print('*'*20 + '\n' + f'{dataset_path} has {num_samples} training data\n' + '*'*20)
+    print('*'*20 + '\n' + f'{dataset_path} has {num_samples} data\n' + '*'*20)
     global_batch_size = args.batch_size_calvin * args.world_size
     num_batches = round_fn(num_samples / global_batch_size)
     num_workers = max(1, args.workers)

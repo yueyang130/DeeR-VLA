@@ -5,7 +5,7 @@ import copy
 from open_flamingo.src.helpers import PerceiverResampler
 from robot_flamingo.models.action_head import DeterministicDecoder, DiffusionDecoder, FCDecoder, GPTDecoder, GaussianDecoder
 from collections import namedtuple
-
+from copy import deepcopy
 
 class MPTFlamingo(nn.Module):
     def __init__(
@@ -98,7 +98,7 @@ class MPTFlamingo(nn.Module):
 
         self.residual = residual
         print(self.vis_dim, self.lang_dim)
-        print(lang_encoder.config)
+        # print(lang_encoder.config)
         if not debug:
             if 'llama' in llm:
                 self.lang_encoder.init_flamingo(
@@ -233,7 +233,7 @@ class MPTFlamingo(nn.Module):
             for i in range(0, early_exit_layer, exit_interval):
                 self.lm_exits[i] = get_encoder()
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
-            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one infal exit!')      
+            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one internal exit!')      
 
         # extra one exit
         self.use_extra_exit = use_extra_exit
@@ -303,6 +303,7 @@ class MPTFlamingo(nn.Module):
         dynamic_early_exit=False,
         exit_controller=None,
         return_in_feat=False,
+        only_extra_exit=False,
     ):
         """
         Forward pass of Flamingo.
@@ -408,8 +409,8 @@ class MPTFlamingo(nn.Module):
         last_action_output = get_action(self.lm_head, last_feat, state_tensor)
         output.logits = last_action_output
         
-        if len(self.lm_exits) > 0:
-            exit_outputs = []
+        exit_outputs = []
+        if len(self.lm_exits) > 0 and not only_extra_exit: # when generate value for finding threshold, we don't need actions from layer exits
             for exit_layer, exit_head in self.lm_exits.items():
                 internal_feat = output.hidden_states[exit_layer]
                 exit_action_output = get_action(exit_head, internal_feat, state_tensor)
@@ -426,12 +427,25 @@ class MPTFlamingo(nn.Module):
             rand_layer_indices = torch.randint(0, n_exit, size=(bs, action_seq_len, 1, 1, 1), device=all_feats.device)
             rand_layer_indices = rand_layer_indices.expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
             rand_layer_feat = torch.gather(all_feats, 2, rand_layer_indices).squeeze(2)     
-            # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
-            rand_layer_feat = rand_layer_feat.flatten(0, 1)
-            # cut off gradient. Loss is used only for training the extra exit, not the backbone.
-            rand_layer_feat = rand_layer_feat.detach()
-            extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
-            output.in_feat = rand_layer_feat # for training value net
+            if not only_extra_exit:
+                # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
+                rand_layer_feat = rand_layer_feat.flatten(0, 1)
+                # cut off gradient. Loss is used only for training the extra exit, not the backbone.
+                rand_layer_feat = rand_layer_feat.detach()
+                extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
+            else:
+                # we only get the predicted values at the t timestep with input feature from all layers.
+                all_layer_feat = []
+                for t in range(self.window_size):
+                    all_layer_feat_t = []
+                    for i in range(len(self.lm_exits)+1):
+                        rand_layer_feat_i = deepcopy(rand_layer_feat) # (bs, action_seq_len, lang_len, d)
+                        rand_layer_feat_i[:, t] = all_feats[:, t, i] # (bs, action_seq_len, n_exit, lang_len, d)
+                        all_layer_feat_t.append(rand_layer_feat_i)
+                    all_layer_feat.append(torch.stack(all_layer_feat_t, dim=0))  # (n_exit, bs, action_seq_len, lang_len, d)
+                rand_layer_feat = torch.stack(all_layer_feat, dim=0)  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
+                extra_exit_output = []
+            
             if return_in_feat:
                 return output, exit_outputs, extra_exit_output, rand_layer_feat
             else:
