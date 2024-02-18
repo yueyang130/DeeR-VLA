@@ -312,11 +312,13 @@ def main():
         default="fp32",
         help="Floating point precision.",
     )
-    # for training  value net
+    # for training value net
     parser.add_argument("--value_dropout", type=float, default=0.0, help='')
     parser.add_argument("--value_weight_decay", type=float, default=0.0, )
     parser.add_argument("--with_exit_embed", default=False, action="store_true")
-
+    parser.add_argument("--discrete", default=False, action="store_true") # model value as discrete distribution and use cross-entropy loss
+    parser.add_argument("--num_bin", type=int, default=100)
+    
     args = parser.parse_args()
     
     # args.train_value = True
@@ -496,6 +498,8 @@ def main():
         pooling=args.pooling,
         with_exit_embed=args.with_exit_embed,
         num_exits=model.get_exit_num(),
+        discrete=args.discrete,
+        num_bin=args.num_bin,
         )
 
     device_id = args.rank % torch.cuda.device_count()
@@ -564,7 +568,7 @@ def main():
     use_diff = (args.head_type == "diffusion")
 
     # load value net if possible
-    resume_from_epoch = 0
+    resume_from_epoch = 0 if not args.discrete else -1 # use one extra epoch to get the distribution of values
     # if args.from_scratch is False:
     
     for epoch in range(resume_from_epoch, args.num_epochs):

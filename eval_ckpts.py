@@ -49,7 +49,8 @@ for ckpt_name in ckpt_names:
         use_state = 1 if 'state' in ckpt_name else 0
         ckpt_path = os.path.join(args.ckpt_dir, ckpt_name)
         # value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_4.pth')
-        value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_0.pth')
+        # value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_0.pth')
+        value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_discrete_4.pth')
         log_dir = f'log_{args.ckpt_dir}'
         os.makedirs(log_dir, exist_ok=True)
         prefix = 'evaluate'

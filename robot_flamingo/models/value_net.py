@@ -7,6 +7,38 @@ from typing import Optional, Tuple
 from tqdm.auto import tqdm
 import math
 
+def get_bin_boundaries(target_value_gathered, num_bin):
+    # Calculate the quantiles to get the bin boundaries
+    quantiles = torch.linspace(0, 1, steps=num_bin + 1, device=target_value_gathered.device)
+    boundaries = torch.quantile(target_value_gathered, quantiles)
+    return boundaries
+
+def value_to_bin_index(value, bin_boundaries):
+    # Find the bin index for the given value
+    bin_index = torch.bucketize(value, bin_boundaries, right=True) - 1
+    # Clamp to handle the edge case where value is exactly the max boundary
+    bin_index = torch.clamp(bin_index, 0, len(bin_boundaries) - 2)
+    return bin_index
+
+def logits_to_expected_value(logits, bin_boundaries):
+    # Assuming logits is a tensor with shape (batch, num_bin)
+    ndim = logits.ndim
+    if ndim == 3:
+        d1, d2 = logits.shape[:2]
+        logits = logits.flatten(0, 1)
+    batch, num_bin = logits.shape
+    # Create a tensor representing the midpoints of each bin
+    bin_midpoints = (bin_boundaries[:-1] + bin_boundaries[1:]) / 2
+    # Expand bin_midpoints to match the batch size
+    bin_midpoints = bin_midpoints.unsqueeze(0).expand(batch, num_bin)
+    # Convert logits to probabilities (softmax)
+    probabilities = torch.softmax(logits, dim=1)
+    # Calculate the expected value as the weighted sum of bin midpoints
+    expected_values = torch.sum(probabilities * bin_midpoints, dim=1)
+    if ndim == 3:
+        expected_values = expected_values.reshape((d1, d2))
+    return expected_values
+
 def get_cast_dtype(precision: str):
     cast_dtype = None
     if precision == "bf16" or precision == "amp_bf16":
@@ -50,6 +82,8 @@ class LSTMValueHead(nn.Module):
         pooling='max',
         with_exit_embed=False,
         num_exits=1,
+        discrete=False,
+        num_bin=100,
     ):
         super().__init__()
         
@@ -78,7 +112,13 @@ class LSTMValueHead(nn.Module):
         self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p)
         self.fusion_mode = fusion_mode
         
-        self.head = MLPNohHead(hidden_size, 1, dropout)
+        self.discrete = discrete
+        self.num_bin = num_bin
+        if discrete:
+            self.head = MLPNohHead(hidden_size, num_bin, dropout)
+            self.boundaries = nn.Parameter(torch.zeros(num_bin+1, dtype=float), requires_grad=False)
+        else:
+            self.head = MLPNohHead(hidden_size, 1, dropout)
 
         self.hidden_state = None
         self.hidden_size = hidden_size
@@ -101,12 +141,17 @@ class LSTMValueHead(nn.Module):
     def update_memory(self):
         self.history_memory.append(self.tmp_input_feature)
         self.hidden_state = self.tmp_hidden_state
+        
+    def set_bin_boundaries(self, bin_boundaries):
+        assert self.num_bin + 1 == bin_boundaries.shape[0]
+        self.boundaries = nn.Parameter(bin_boundaries, requires_grad=False)
 
     def forward(  # type: ignore
         self,
         input_feature: torch.Tensor,
         h_0: Optional[torch.Tensor] = None,
         state_tensor=None,
+        return_value=False,
     ):
         """
         The key difference between LSTMActionHead and LSTMValueHead lies in hidden states with inference.
@@ -186,8 +231,16 @@ class LSTMValueHead(nn.Module):
         else:
             raise NotImplementedError
 
-        values = self.head(x) # (exits * bs, seq_len, 1)
-        return values
+        if self.discrete:
+            assert not torch.all(self.boundaries==0), 'please set bin boundaries before calling forward'
+            logits = self.head(x)
+            if return_value:
+                return logits_to_expected_value(logits, self.boundaries)
+            else:
+                return logits
+        else:
+            values = self.head(x) # (exits * bs, seq_len, 1)
+            return values
     
 
 class ExitController(torch.nn.Module):
@@ -273,8 +326,8 @@ class ExitController(torch.nn.Module):
     def forward(self, x, i):
         assert self.thresholds is not None, "Please set thresholds before calling forward"
         
-        value = self.value_net(x)
-        
+        value = self.value_net(x, return_value=True)
+
         # self.history_values[i].append(value)
         # if torch.distributed.get_rank() == 0:
         #     total = sum(len(h) for h in self.history_values)
@@ -415,7 +468,7 @@ def generate_values(
                 # loss_calvin *= args.loss_multiplier_calvin
                 action_seq_len, exit_num, bs = features.shape[:3]  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
                 features = features.flatten(2, 3).flatten(0, 1)
-                values = value_net(features).squeeze(-1) # (action_seq_len * exits, bs * seq_len, lang_len, d) -> (action_seq_len * exits * bs, seq_len)
+                values = value_net(features,return_value=True).squeeze(-1) # (action_seq_len * exits, bs * seq_len, lang_len, d) -> (action_seq_len * exits * bs, seq_len)
                 values = values.reshape(action_seq_len, exit_num, bs, action_seq_len)
                 value_list = [values[i, :, :, i:i+1]  for i in range(action_seq_len)] # action_seq_len * (exit_num, bs, 1)
                 values = torch.cat(value_list, dim=2) #  (exit_num, bs, action_seq_len)
@@ -499,7 +552,7 @@ def generate_values(
                 # model.apply(mask_embedding)
 
                 features = torch.stack(final_output.hidden_states, dim=0) 
-                values = value_net(features) # (exits, bs * seq_len, lang_len, 1) -> (exits * bs, seq_len, 1)
+                values = value_net(features, return_value=True) # (exits, bs * seq_len, lang_len, 1) -> (exits * bs, seq_len, 1)
                 values = values.reshape(len(all_outputs), -1, values.shape[1]) # (exits, bs, seq_len)
                 target_values = loss_calvin.detach()
             

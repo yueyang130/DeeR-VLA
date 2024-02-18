@@ -540,6 +540,8 @@ def main():
         value_net_ckpt = torch.load(args.value_net_ckpt, map_location="cpu")
         
         readout_args(args, value_net_ckpt, "with_exit_embed", False)
+        readout_args(args, value_net_ckpt, "discrete", False)
+        readout_args(args, value_net_ckpt, "num_bin", 100)
         
         num_exit = model.get_exit_num()
         value_net = LSTMValueHead(
@@ -553,6 +555,8 @@ def main():
             pooling=args.pooling,
             with_exit_embed=args.with_exit_embed,
             num_exits=num_exit,
+            discrete=args.discrete,
+            num_bin=args.num_bin,   
         )
         
         value_net_ckpt_dict = {k.replace('module.', ''): v for k, v in value_net_ckpt["model_state_dict"].items()} # remove ddp prefix

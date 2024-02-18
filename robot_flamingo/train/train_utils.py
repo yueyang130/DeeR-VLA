@@ -11,6 +11,7 @@ import itertools
 from einops import rearrange
 from torch.cuda.amp import GradScaler
 import os
+from models.value_net import value_to_bin_index, get_bin_boundaries
 
 def get_cast_dtype(precision: str):
     cast_dtype = None
@@ -68,20 +69,28 @@ def save_value_net_ckpt(args, ddp_value_net, optimizer, lr_scheduler, epoch, ste
         "epoch": epoch,
         "precision": args.precision,
         "with_exit_embed": args.with_exit_embed,
-        "model_state_dict": get_checkpoint(ddp_value_net),
+        "discrete": args.discrete,
+        "num_bin": args.num_bin,
+        "model_state_dict": ddp_value_net.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "lr_scheduler_state_dict": lr_scheduler.state_dict(),
     }
+    
+   
 
     ckpt_name = os.path.basename(robo_ckpt_path)[:-4]
     
+    value_prefix = 'value_net'
+    if args.discrete:
+            value_prefix += '_discrete'
+    
     if epoch != -1:
         if epoch > 1000:
-            ckpt_name += '_value_net_{}_iter.pth'.format(epoch)
+            ckpt_name += '_{}_{}_iter.pth'.format(value_prefix, epoch)
         else:
-            ckpt_name += '_value_net_{}.pth'.format(epoch)
+            ckpt_name += '_{}_{}.pth'.format(value_prefix, epoch)
     else:
-        ckpt_name += '_value_net_final_weights.pth'
+        ckpt_name += '_{}_final_weights.pth'.format(value_prefix)
     
     ckpt_path = os.path.join(args.run_name, ckpt_name)
     if args.rank == 0:
@@ -1877,6 +1886,8 @@ def train_value_net_one_epoch_calvin_multi_exit(
 
     model.eval()
     value_net.train()
+    
+    
 
     # setup logging
     step_time_m = (
@@ -2111,6 +2122,8 @@ def train_value_net_one_epoch_calvin_dynamic_exit(
 
     model.eval()
     value_net.train()
+    
+    target_value_list = []
 
     # setup logging
     step_time_m = (
@@ -2245,59 +2258,88 @@ def train_value_net_one_epoch_calvin_dynamic_exit(
                 #         m.weight.grad = m.weight.grad * zero_mask
                 # model.apply(mask_embedding)
 
-            # train value net
-            values = value_net(features).squeeze(-1)
-            target_values = loss_calvin.detach()
-            loss_value = torch.nn.functional.huber_loss(values, target_values, reduction='none')
-            loss_value = loss_value.mean()
-            mv_avg_loss.append(loss_value.item())
-            
-        # backward
-        if 'amp' in args.precision:
-            scaler.scale(loss_value).backward()
-        else:
-            loss_value.backward()
-        
-        # unscale grad. Thus clip with original threshold
-        if 'amp' in args.precision:
-            scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(value_net.parameters(), 1.0)
- 
-        # step optimizer and log
-        if (((num_steps + 1) % args.gradient_accumulation_steps) == 0) or (
-            num_steps == num_batches_per_epoch - 1
-        ):
-            if 'amp' in args.precision:
-                scaler.step(optimizer)
-                scaler.update()
+            if epoch == -1:
+                target_value_list.append(loss_calvin.detach())
             else:
-                optimizer.step()
-                
-            lr_scheduler.step()
-            optimizer.zero_grad()
+                # train value net
+                target_values = loss_calvin.detach()
+                if args.discrete:
+                    logits = value_net(features).flatten(0, 1)
+                    bin_label = value_to_bin_index(target_values, value_net.module.boundaries).flatten(0, 1)
+                    loss_value = torch.nn.functional.cross_entropy(logits, bin_label, reduction='none')
+                    loss_value = loss_value.mean()
+                else:
+                    values = value_net(features).squeeze(-1)
+                    loss_value = torch.nn.functional.huber_loss(values, target_values, reduction='none')
+                    loss_value = loss_value.mean()
+                mv_avg_loss.append(loss_value.item())
+        
+        if epoch >= 0: 
+            # backward
+            if 'amp' in args.precision:
+                scaler.scale(loss_value).backward()
+            else:
+                loss_value.backward()
+            
+            # unscale grad. Thus clip with original threshold
+            if 'amp' in args.precision:
+                scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(value_net.parameters(), 1.0)
+    
+            # step optimizer and log
+            if (((num_steps + 1) % args.gradient_accumulation_steps) == 0) or (
+                num_steps == num_batches_per_epoch - 1
+            ):
+                if 'amp' in args.precision:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                    
+                lr_scheduler.step()
+                optimizer.zero_grad()
 
-            if args.rank == 0 and args.report_to_wandb:
-                wandb.log(
-                    {
-                        "lr": optimizer.param_groups[0]["lr"],
-                        "loss_value": loss_value.item(),
-                        "global_step": global_step,
-                        "scale_factor": scaler.get_scale(),
-                    },
-                    commit=True,
+                if args.rank == 0 and args.report_to_wandb:
+                    wandb.log(
+                        {
+                            "lr": optimizer.param_groups[0]["lr"],
+                            "loss_value": loss_value.item(),
+                            "global_step": global_step,
+                            "scale_factor": scaler.get_scale(),
+                        },
+                        commit=True,
+                    )
+
+            # Log loss to console
+            if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
+                print(
+                    f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Value Loss: ({loss_value.item():.3f}"
                 )
+            avg_horizon = min(100, len(mv_avg_loss))
+            t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon})
 
-        # Log loss to console
-        if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
-            print(
-                f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Value Loss: ({loss_value.item():.3f}"
-            )
-        avg_horizon = min(100, len(mv_avg_loss))
-        t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon})
-
-        if args.save_every_iter != -1 and global_step % args.save_every_iter == 0 and global_step > 0:
-            if args.rank == 0:
-                save_value_net_ckpt(args, value_net, optimizer, lr_scheduler, epoch, global_step, args.roboflamingo_checkpoint)
+            if args.save_every_iter != -1 and global_step % args.save_every_iter == 0 and global_step > 0:
+                if args.rank == 0:
+                    save_value_net_ckpt(args, value_net, optimizer, lr_scheduler, epoch, global_step, args.roboflamingo_checkpoint)
+    
+    if epoch == -1:
+        device_id = torch.distributed.get_rank()
+        num_devices = torch.distributed.get_world_size()
+        target_value_list = torch.cat(target_value_list, dim=0).flatten(0, 1) # (bs * action_seq_len)
+        target_value_gathered = [torch.zeros_like(target_value_list) for _ in range(num_devices)]
+        torch.distributed.all_gather(target_value_gathered, target_value_list) 
+        target_value_gathered = torch.cat(target_value_gathered, dim=0)
+        if args.rank == 0:
+            print(f'{target_value_list.shape[0]} samples on device 0, {target_value_gathered.shape[0]} samples on all devices.')
+        
+        # Calculate quantiles to determine bin edges
+        boundaries = get_bin_boundaries(target_value_gathered, args.num_bin)
+        value_net.module.set_bin_boundaries(boundaries)
+        if args.rank == 0:
+            print(f'min value: {boundaries.min():.5f}')                                
+            print(f'mean value: {boundaries.mean():.5f}')                                
+            print(f'median value: {boundaries.median():.5f}')                                
+            print(f'max value: {boundaries.max():.5f}')                                
 
 
 def get_checkpoint(model):
