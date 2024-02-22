@@ -27,19 +27,7 @@ ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
 ckpt_names = ckpt_names[:1]
 ckpt_names = [
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
     'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
-    
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
-    
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.2_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.2_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.5_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
-    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_lr_scale=0.25_dropout=0.5_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
 ]
 
 print(ckpt_names)
@@ -49,8 +37,7 @@ for ckpt_name in ckpt_names:
         use_state = 1 if 'state' in ckpt_name else 0
         ckpt_path = os.path.join(args.ckpt_dir, ckpt_name)
         # value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_4.pth')
-        # value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_0.pth')
-        value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_discrete_4.pth')
+        value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_discrete_b20_4.pth')
         log_dir = f'log_{args.ckpt_dir}'
         os.makedirs(log_dir, exist_ok=True)
         prefix = 'evaluate'
@@ -63,7 +50,8 @@ for ckpt_name in ckpt_names:
         prefix += '_exit'
         prefix += f'_{args.multi_execution}_execution'
             
-        log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
+        # log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
+        log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(os.path.basename(value_net_ckpt_path).split('.')[:-1]))
         if os.path.exists(log_file): 
             print(f'skip {log_file}')
             continue

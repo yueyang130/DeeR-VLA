@@ -69,6 +69,7 @@ def save_value_net_ckpt(args, ddp_value_net, optimizer, lr_scheduler, epoch, ste
         "epoch": epoch,
         "precision": args.precision,
         "with_exit_embed": args.with_exit_embed,
+        "with_time_embed": args.with_time_embed,
         "discrete": args.discrete,
         "num_bin": args.num_bin,
         "model_state_dict": ddp_value_net.state_dict(),
@@ -82,7 +83,7 @@ def save_value_net_ckpt(args, ddp_value_net, optimizer, lr_scheduler, epoch, ste
     
     value_prefix = 'value_net'
     if args.discrete:
-            value_prefix += '_discrete'
+            value_prefix += f'_discrete_b{args.num_bin}'
     
     if epoch != -1:
         if epoch > 1000:
@@ -2211,7 +2212,7 @@ def train_value_net_one_epoch_calvin_dynamic_exit(
                     )
                     # only need extra exit loss
                     extra_exit_output = o[2]
-                    features = o[3]
+                    features, exit_idx = o[3], o[4]
                     num_actions, bin_gripper = extra_exit_output[0], extra_exit_output[1]
                     bin_actions, bin_logits = bin_gripper
                     if args.multi_step_action != 1:
@@ -2264,12 +2265,32 @@ def train_value_net_one_epoch_calvin_dynamic_exit(
                 # train value net
                 target_values = loss_calvin.detach()
                 if args.discrete:
-                    logits = value_net(features).flatten(0, 1)
-                    bin_label = value_to_bin_index(target_values, value_net.module.boundaries).flatten(0, 1)
-                    loss_value = torch.nn.functional.cross_entropy(logits, bin_label, reduction='none')
+                    logits = value_net(features, exit_idx=exit_idx)
+                    bin_label = value_to_bin_index(target_values, value_net.module.boundaries)
+                    
+                    # logits = logits[:, 4:].flatten(0, 1)
+                    # bin_label = bin_label[:, 4:].flatten(0, 1)
+                    
+                    # loss_value = torch.nn.functional.cross_entropy(logits, bin_label, reduction='none')
+                    
+                    # loss_value = cumulative_link_loss(logits, bin_label)
+                    
+                    loss_value = torch.nn.functional.binary_cross_entropy_with_logits(logits.squeeze(-1), bin_label.float(), reduction='none')
+                    
+                    # test1
+                    # t_label = torch.arange(args.window_size, device=logits.device).unsqueeze(0).expand(args.batch_size_calvin, -1).flatten(0, 1)
+                    # loss_value = torch.nn.functional.cross_entropy(logits, t_label, reduction='none')
+                    
+                    # test2
+                    # loss_value = torch.nn.functional.binary_cross_entropy_with_logits(logits, bin_targets, reduction='none')
+                    
+                    # test3
+                    # loss_value = torch.nn.functional.binary_cross_entropy_with_logits(logits.squeeze(-1), torch.zeros_like(bin_label.float()), reduction='none')
+                    
                     loss_value = loss_value.mean()
                 else:
-                    values = value_net(features).squeeze(-1)
+                    values = value_net(features, exit_idx=exit_idx).squeeze(-1)
+                    target_values *= 1000
                     loss_value = torch.nn.functional.huber_loss(values, target_values, reduction='none')
                     loss_value = loss_value.mean()
                 mv_avg_loss.append(loss_value.item())
@@ -2284,7 +2305,10 @@ def train_value_net_one_epoch_calvin_dynamic_exit(
             # unscale grad. Thus clip with original threshold
             if 'amp' in args.precision:
                 scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(value_net.parameters(), 1.0)
+            if args.discrete:
+                grad_norm = torch.nn.utils.clip_grad_norm_(value_net.parameters(), 10.0)
+            else:
+                grad_norm = torch.nn.utils.clip_grad_norm_(value_net.parameters(), 1.0)
     
             # step optimizer and log
             if (((num_steps + 1) % args.gradient_accumulation_steps) == 0) or (
@@ -2306,6 +2330,7 @@ def train_value_net_one_epoch_calvin_dynamic_exit(
                             "loss_value": loss_value.item(),
                             "global_step": global_step,
                             "scale_factor": scaler.get_scale(),
+                            "grad_norm": grad_norm.item(),
                         },
                         commit=True,
                     )
@@ -2325,21 +2350,57 @@ def train_value_net_one_epoch_calvin_dynamic_exit(
     if epoch == -1:
         device_id = torch.distributed.get_rank()
         num_devices = torch.distributed.get_world_size()
-        target_value_list = torch.cat(target_value_list, dim=0).flatten(0, 1) # (bs * action_seq_len)
+        target_value_list = torch.cat(target_value_list, dim=0) # (bs , action_seq_len)
         target_value_gathered = [torch.zeros_like(target_value_list) for _ in range(num_devices)]
         torch.distributed.all_gather(target_value_gathered, target_value_list) 
-        target_value_gathered = torch.cat(target_value_gathered, dim=0)
+        target_value_gathered = torch.cat(target_value_gathered, dim=0) # (bs , action_seq_len)
         if args.rank == 0:
             print(f'{target_value_list.shape[0]} samples on device 0, {target_value_gathered.shape[0]} samples on all devices.')
         
         # Calculate quantiles to determine bin edges
-        boundaries = get_bin_boundaries(target_value_gathered, args.num_bin)
+        boundaries = get_bin_boundaries(target_value_gathered.flatten(0, 1), args.num_bin)
         value_net.module.set_bin_boundaries(boundaries)
         if args.rank == 0:
-            print(f'min value: {boundaries.min():.5f}')                                
-            print(f'mean value: {boundaries.mean():.5f}')                                
-            print(f'median value: {boundaries.median():.5f}')                                
-            print(f'max value: {boundaries.max():.5f}')                                
+            print(f'min value: {target_value_gathered.min():.5f}')                                
+            print(f'mean value: {target_value_gathered.mean():.5f}')                                
+            print(f'median value: {target_value_gathered.median():.5f}')                                
+            print(f'max value: {target_value_gathered.max():.5f}')
+            
+            import matplotlib.pyplot as plt
+            for t in range(target_value_gathered.shape[1]):
+                data = target_value_gathered[:, t].cpu().numpy()
+                plt.hist(data, bins=50, range=(0, 0.07))
+                plt.savefig(f'vis/value_dist_{os.path.basename(args.calvin_dataset)}_{t=}_bin50.jpg')
+                plt.close()
+                # plot the distribution                                
+
+
+
+def cumulative_link_loss(y_pred, y_true):
+    # y_pred: predictions, a tensor of shape (batch_size, num_classes)
+    # y_true: true labels, a tensor of shape (batch_size,)
+    
+    # Get the number of classes
+    num_classes = y_pred.size(1)
+    
+    # Create a tensor with cumulative probabilities
+    y_cum_prob = torch.cumsum(F.softmax(y_pred, dim=1), dim=1)
+    
+    # Create a tensor with binary labels for each binary classification problem
+    y_binary = torch.zeros_like(y_pred)
+    y_binary[torch.arange(y_true.size(0)), y_true] = 1
+    y_binary = torch.cumsum(y_binary, dim=1)
+    y_binary = y_binary[:, :-1]
+    
+    def logit(y):
+        eps = 1e-6  # Small constant
+        return torch.log((y + eps) / (1 - y + eps))
+    y_cum_logit = logit(y_cum_prob[:, :-1])
+    # Calculate the binary cross-entropy for each binary classification problem
+    losses = F.binary_cross_entropy_with_logits(y_cum_logit, y_binary, reduction='none')
+    
+    # Return the average loss
+    return losses.mean()
 
 
 def get_checkpoint(model):

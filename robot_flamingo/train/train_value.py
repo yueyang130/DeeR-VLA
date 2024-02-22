@@ -25,7 +25,7 @@ from transformers import (
 )
 
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-from models.value_net import ValueNet, LSTMValueHead
+from models.value_net import LSTMValueHead, MLPValueHead
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed + rank)
@@ -316,6 +316,7 @@ def main():
     parser.add_argument("--value_dropout", type=float, default=0.0, help='')
     parser.add_argument("--value_weight_decay", type=float, default=0.0, )
     parser.add_argument("--with_exit_embed", default=False, action="store_true")
+    parser.add_argument("--with_time_embed", default=False, action="store_true")
     parser.add_argument("--discrete", default=False, action="store_true") # model value as discrete distribution and use cross-entropy loss
     parser.add_argument("--num_bin", type=int, default=100)
     
@@ -487,16 +488,29 @@ def main():
             name=args.run_name,
             config=vars(args),
         )
+    # value_net = MLPValueHead(
+    #     in_features=model.lm_head.in_features, 
+    #     window_size=args.eval_hist_size,
+    #     dropout=args.value_dropout,
+    #     hidden_size=model.lm_head.hidden_size,
+    #     fusion_mode=args.fusion_mode, 
+    #     use_state=args.use_state, 
+    #     pooling=args.pooling,
+    #     with_exit_embed=args.with_exit_embed,
+    #     num_exits=model.get_exit_num(),
+    #     discrete=args.discrete,
+    #     num_bin=args.num_bin,
+    #     )
     value_net = LSTMValueHead(
         in_features=model.lm_head.in_features, 
         window_size=args.eval_hist_size,
         dropout=args.value_dropout,
         hidden_size=model.lm_head.hidden_size,
-        out_features=1,
         fusion_mode=args.fusion_mode, 
         use_state=args.use_state, 
         pooling=args.pooling,
         with_exit_embed=args.with_exit_embed,
+        with_time_embed=args.with_time_embed,
         num_exits=model.get_exit_num(),
         discrete=args.discrete,
         num_bin=args.num_bin,

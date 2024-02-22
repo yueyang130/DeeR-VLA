@@ -47,36 +47,15 @@ def get_cast_dtype(precision: str):
         cast_dtype = torch.float16
     return cast_dtype
 
-class ValueNet(nn.Module):
-    def __init__(self, hidden_size, feat_size, dropout, with_layer_embed=False):
-        super().__init__()
-        self.value_net = MLPNohHead(hidden_size+feat_size, 1, dropout)
-        self.with_layer_embed = with_layer_embed
-        if with_layer_embed:
-            self.layer_embed = None
-            raise NotImplementedError
-        
-    def forward(self, hidden_state, feat):
-        if self.with_layer_embed:
-            raise NotImplementedError
-        if hidden_state.dim > 2:
-            raise NotImplementedError
-        x = torch.concat([hidden_state, feat], dim=1)
-        x = self.value_net(x)
-        return x
-    
 
-class LSTMValueHead(nn.Module):
+class MLPValueHead(nn.Module):
     def __init__(
         self,
         in_features: int,
         window_size: int,
         dropout: float,
         history_len = None,
-        out_features: int = 6,
         hidden_size: int = 1024,
-        num_layers: int = 4,
-        policy_rnn_dropout_p: float = 0.1,
         fusion_mode='',
         use_state=False,
         pooling='max',
@@ -102,7 +81,147 @@ class LSTMValueHead(nn.Module):
         if fusion_mode == 'two_way':
             in_features *= 2
         self.in_features = in_features
-        self.out_features = out_features
+        self.window_size = window_size
+        if history_len is None:
+            history_len = window_size
+        self.history_len = history_len
+        self.history_memory = []
+        self.fusion_mode = fusion_mode
+        
+        self.discrete = discrete
+        self.num_bin = num_bin
+        if discrete:
+            self.head = MLPNohHead(in_features, num_bin, dropout)
+            self.boundaries = nn.Parameter(torch.zeros(num_bin+1, dtype=float), requires_grad=False)
+        else:
+            self.head = MLPNohHead(in_features, 1, dropout)
+
+        self.hidden_state = None
+        self.hidden_size = hidden_size
+        self.rnn_out = None
+
+        if pooling == 'max':
+            self.global_1d_pool = nn.AdaptiveMaxPool1d(1)
+        else:
+            self.global_1d_pool = nn.AdaptiveAvgPool1d(1)
+        
+        if self.fusion_mode == 'two_way':
+            if pooling == 'max':
+                self.gripper_1d_max_pool = nn.AdaptiveMaxPool1d(1)
+            else:
+                self.gripper_1d_max_pool = nn.AdaptiveAvgPool1d(1)
+        
+    def set_bin_boundaries(self, bin_boundaries):
+        assert self.num_bin + 1 == bin_boundaries.shape[0]
+        self.boundaries = nn.Parameter(bin_boundaries, requires_grad=False)
+
+    def forward(  # type: ignore
+        self,
+        input_feature: torch.Tensor,
+        state_tensor=None,
+        return_value=False,
+    ):
+        
+        # (num_layer, bs * action_seq_len, lang_len, d) --> (num_exit * bs * action_seq_len, lang_len, d)
+        if input_feature.dim() == 4:
+            input_feature = input_feature.reshape(-1, *input_feature.shape[2:]) 
+        
+        if self.with_exit_embed:
+            raise NotImplementedError
+        
+        # reshape
+        if input_feature.dim() == 3: # (num_exit * bs * action_seq_len, lang_len, d)
+            if self.fusion_mode == 'two_way':
+                input_feature = input_feature.reshape(-1, self.window_size, *input_feature.shape[1:]) 
+                
+                bs = int(input_feature.shape[0] // 2)
+                
+                rgb_feat = input_feature[:bs].view(bs*self.window_size, *input_feature.shape[2:])
+                rgb_feat = self.global_1d_pool(rgb_feat.permute(0, 2, 1)).squeeze(-1)
+                
+                gripper_feat = input_feature[bs:].view(bs*self.window_size, *input_feature.shape[2:])
+                gripper_feat = self.global_1d_pool(gripper_feat.permute(0, 2, 1)).squeeze(-1)
+                
+                input_feature = torch.cat([rgb_feat, gripper_feat], dim=-1)
+            else:
+                input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (num_exit * bs * seq_len, d) maxpooling along lang_seq
+        
+        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (num_exit * bs, seq_len, d)
+
+        if state_tensor is not None and self.use_state:
+            assert NotImplementedError("The Reshape operation likely needs to be rewritten.")
+            arm_state = state_tensor[..., :6] # b,len,state_dim-1
+            arm_state_embeddings = self.embed_arm_state(arm_state)
+            arm_state_embeddings = arm_state_embeddings.view(-1, self.window_size, arm_state_embeddings.shape[-1]) # b,len,h
+            gripper_state = ((state_tensor[..., -1]+1.0) / 2).long() # b,len,1
+            gripper_state_embeddings = self.embed_gripper_state(gripper_state)
+            gripper_state_embeddings = gripper_state_embeddings.view(-1, self.window_size, gripper_state_embeddings.shape[-1]) # b,len,h
+            state_embeddings = torch.cat((arm_state_embeddings, gripper_state_embeddings), dim=2) # b,len,2h
+            state_embeddings = self.embed_state(state_embeddings) # b,len,h
+
+            # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
+            input_feature = input_feature + state_embeddings
+        
+        if self.window_size == 1:  # the first frame of an action sequence
+            # infernece
+            x = input_feature[:, -1].unsqueeze(1) #  (exits * bs, 1, d)
+        else:
+            # train
+            x = input_feature #  (exits * bs, seq_len, d)
+
+        if self.discrete:
+            assert not torch.all(self.boundaries==0), 'please set bin boundaries before calling forward'
+            logits = self.head(x)
+            if return_value:
+                return logits_to_expected_value(logits, self.boundaries)
+            else:
+                return logits
+        else:
+            values = self.head(x) # (exits * bs, seq_len, 1)
+            return values    
+
+
+class LSTMValueHead(nn.Module):
+    def __init__(
+        self,
+        in_features: int,
+        window_size: int,
+        dropout: float,
+        history_len = None,
+        hidden_size: int = 1024,
+        num_layers: int = 4,
+        policy_rnn_dropout_p: float = 0.1,
+        fusion_mode='',
+        use_state=False,
+        pooling='max',
+        with_exit_embed=False,
+        with_time_embed=False,
+        num_exits=1,
+        discrete=False,
+        num_bin=100,
+    ):
+        super().__init__()
+        
+        self.fc_state = None
+        self.use_state = use_state
+        self.with_exit_embed = with_exit_embed
+        self.with_time_embed = with_time_embed
+        if use_state:
+            print('Using state in LSTM value net')
+            state_in_dim = 7
+            self.embed_arm_state = nn.Sequential(torch.nn.Linear(state_in_dim-1, in_features), nn.ReLU())
+            self.embed_gripper_state = nn.Sequential(torch.nn.Embedding(2, in_features), nn.ReLU()) # one-hot gripper state
+            self.embed_state = torch.nn.Linear(2*in_features, in_features)
+        if with_exit_embed:
+            self.embed_exit = torch.nn.Embedding(num_exits, in_features)
+            nn.init.normal_(self.embed_exit.weight, mean=0.0, std=0.02)
+        if with_time_embed:
+            self.embed_time = torch.nn.Embedding(window_size, in_features)
+            nn.init.normal_(self.embed_time.weight, mean=0.0, std=0.02)
+        
+        if fusion_mode == 'two_way':
+            in_features *= 2
+        self.in_features = in_features
         self.window_size = window_size
         if history_len is None:
             history_len = window_size
@@ -114,8 +233,9 @@ class LSTMValueHead(nn.Module):
         
         self.discrete = discrete
         self.num_bin = num_bin
+        self.dim_out = num_bin if num_bin > 2 else 1 # binary classification loss
         if discrete:
-            self.head = MLPNohHead(hidden_size, num_bin, dropout)
+            self.head = MLPNohHead(hidden_size, self.dim_out, dropout)
             self.boundaries = nn.Parameter(torch.zeros(num_bin+1, dtype=float), requires_grad=False)
         else:
             self.head = MLPNohHead(hidden_size, 1, dropout)
@@ -149,6 +269,8 @@ class LSTMValueHead(nn.Module):
     def forward(  # type: ignore
         self,
         input_feature: torch.Tensor,
+        exit_idx: torch.Tensor = None,
+        t_idx: torch.Tensor = None,
         h_0: Optional[torch.Tensor] = None,
         state_tensor=None,
         return_value=False,
@@ -163,8 +285,6 @@ class LSTMValueHead(nn.Module):
         if input_feature.dim() == 4:
             input_feature = input_feature.reshape(-1, *input_feature.shape[2:]) 
         
-        if self.with_exit_embed:
-            raise NotImplementedError
         
         # reshape
         if input_feature.dim() == 3: # (num_exit * bs * action_seq_len, lang_len, d)
@@ -194,9 +314,18 @@ class LSTMValueHead(nn.Module):
             gripper_state_embeddings = gripper_state_embeddings.view(-1, self.window_size, gripper_state_embeddings.shape[-1]) # b,len,h
             state_embeddings = torch.cat((arm_state_embeddings, gripper_state_embeddings), dim=2) # b,len,2h
             state_embeddings = self.embed_state(state_embeddings) # b,len,h
-
+        
             # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
             input_feature = input_feature + state_embeddings
+        
+        # Only consider training. Please modify code for inference.
+        if self.with_time_embed:
+            time_embeddings = self.embed_time(torch.arange(self.window_size, device=input_feature.device))
+            time_embeddings = time_embeddings.unsqueeze(0).expand(input_feature.shape[0], -1 ,-1)
+            input_feature += time_embeddings
+        if self.with_exit_embed:
+            exit_embeddings = self.embed_exit(exit_idx) # (bs, action_seq_len, d)
+            input_feature += exit_embeddings
         
         if not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase):
             if input_feature.shape[1] == 1:  # the first frame of an action sequence
@@ -241,6 +370,7 @@ class LSTMValueHead(nn.Module):
         else:
             values = self.head(x) # (exits * bs, seq_len, 1)
             return values
+        
     
 
 class ExitController(torch.nn.Module):

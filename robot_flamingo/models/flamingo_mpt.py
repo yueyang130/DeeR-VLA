@@ -443,11 +443,11 @@ class MPTFlamingo(nn.Module):
                         rand_layer_feat_i[:, t] = all_feats[:, t, i] # (bs, action_seq_len, n_exit, lang_len, d)
                         all_layer_feat_t.append(rand_layer_feat_i)
                     all_layer_feat.append(torch.stack(all_layer_feat_t, dim=0))  # (n_exit, bs, action_seq_len, lang_len, d)
-                rand_layer_feat = torch.stack(all_layer_feat, dim=0)  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
+                rand_layer_feat = torch.stack(all_layer_feat, dim=0).detach()  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
                 extra_exit_output = []
             
             if return_in_feat:
-                return output, exit_outputs, extra_exit_output, rand_layer_feat
+                return output, exit_outputs, extra_exit_output, rand_layer_feat, rand_layer_indices[:, :, 0, 0, 0]
             else:
                 return output, exit_outputs, extra_exit_output
         else:

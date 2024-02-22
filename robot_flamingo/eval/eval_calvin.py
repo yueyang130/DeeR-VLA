@@ -21,7 +21,7 @@ from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp, check_loaded_parameters
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-from models.value_net import ValueNet, LSTMValueHead, ExitController
+from models.value_net import LSTMValueHead, ExitController
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed)
@@ -549,7 +549,6 @@ def main():
             window_size=args.eval_hist_size,
             dropout=0.0,
             hidden_size=model.lm_head.hidden_size,
-            out_features=1,
             fusion_mode=args.fusion_mode, 
             use_state=args.use_state, 
             pooling=args.pooling,
