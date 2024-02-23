@@ -15,7 +15,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
-from train_utils import get_checkpoint, train_value_net_one_epoch_calvin_multi_exit, train_value_net_one_epoch_calvin_dynamic_exit, save_value_net_ckpt
+from train_utils import get_checkpoint, train_value_net_one_epoch_calvin_multi_exit, \
+    train_value_net_one_epoch_calvin_dynamic_exit, train_value_net_one_epoch_calvin_dynamic_exit_debug, save_value_net_ckpt
 from robot_flamingo.eval.eval_utils import check_loaded_parameters
 from torch.distributed.elastic.multiprocessing.errors import record
 from transformers import (
@@ -25,7 +26,7 @@ from transformers import (
 )
 
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-from models.value_net import LSTMValueHead, MLPValueHead
+from models.value_net import LSTMValueHead, MLPValueHead, DiffValueHead
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed + rank)
@@ -319,6 +320,8 @@ def main():
     parser.add_argument("--with_time_embed", default=False, action="store_true")
     parser.add_argument("--discrete", default=False, action="store_true") # model value as discrete distribution and use cross-entropy loss
     parser.add_argument("--num_bin", type=int, default=100)
+    parser.add_argument("--exit_lr_scale", type=float, default=1.0, help='scale learning rate for exits')
+    parser.add_argument("--value_net_lr_scale", type=float, default=1.0, help='scale learning rate for value net')
     
     args = parser.parse_args()
     
@@ -501,14 +504,25 @@ def main():
     #     discrete=args.discrete,
     #     num_bin=args.num_bin,
     #     )
-    value_net = LSTMValueHead(
-        in_features=model.lm_head.in_features, 
+    # value_net = LSTMValueHead(
+    #     in_features=model.lm_head.in_features, 
+    #     window_size=args.eval_hist_size,
+    #     dropout=args.value_dropout,
+    #     hidden_size=model.lm_head.hidden_size,
+    #     fusion_mode=args.fusion_mode, 
+    #     use_state=args.use_state, 
+    #     pooling=args.pooling,
+    #     with_exit_embed=args.with_exit_embed,
+    #     with_time_embed=args.with_time_embed,
+    #     num_exits=model.get_exit_num(),
+    #     discrete=args.discrete,
+    #     num_bin=args.num_bin,
+    #     )
+    value_net = DiffValueHead(
+        in_features=1024, 
         window_size=args.eval_hist_size,
         dropout=args.value_dropout,
         hidden_size=model.lm_head.hidden_size,
-        fusion_mode=args.fusion_mode, 
-        use_state=args.use_state, 
-        pooling=args.pooling,
         with_exit_embed=args.with_exit_embed,
         with_time_embed=args.with_time_embed,
         num_exits=model.get_exit_num(),
@@ -534,8 +548,10 @@ def main():
 
     model = model.to(device_id)
     ddp_model = DDP(model, device_ids=[device_id], find_unused_parameters=True)
-    model.eval() # not train the VLM
-    ddp_model.eval()
+    # model.eval() # not train the VLM
+    # ddp_model.eval()
+    model.train() # not train the VLM
+    ddp_model.train()
     
     value_net = value_net.to(device_id)
     ddp_value_net = DDP(value_net, device_ids=[device_id], find_unused_parameters=True)
@@ -551,7 +567,74 @@ def main():
     ddp_model.load_state_dict(ckpt_dict, False)  # 只保存了求梯度的部分
 
     args.learning_rate = args.learning_rate * args.batch_size_calvin / 6 # adaptive lr
-    optimizer = torch.optim.AdamW(ddp_value_net.parameters(), lr=args.learning_rate, weight_decay=args.value_weight_decay)
+    
+    
+    
+    def get_model_grouped_params(model):
+        param_groups = {}
+
+        def apply_decay(x):
+            # if not args.exit_decay:
+            if False:
+                apply_decay_bool = "gated_cross_attn_layer" in x
+            else:
+                apply_decay_bool = ("gated_cross_attn_layer" in x) or ('lm_head' in x) or ('lm_exit_modules' in x) or ('extra_exit' in x)
+            return (
+                apply_decay_bool
+                and "ff_gate" not in x
+                and "attn_gate" not in x
+                and "norm" not in x
+                and "bias" not in x
+            )
+
+        def apply_lr_scale(n, p):
+            if 'lm_head' in n or 'lm_exit_modules' in n or 'extra_exit' in n:
+                lr_scale = args.exit_lr_scale
+            else:
+                lr_scale = 1.0
+
+            if lr_scale not in param_groups:
+                param_groups[lr_scale] = []
+
+            param_groups[lr_scale].append((n, p))
+
+        # set lr_scale
+        for n, p in model.named_parameters():
+            apply_lr_scale(n, p)
+        # set weight decay
+        grouped_params = []
+        for lr_scale, params in param_groups.items():
+            params_with_wd, params_without_wd = [], []
+            for n, p in params:
+                if apply_decay(n):
+                    params_with_wd.append(p)
+                else:
+                    params_without_wd.append(p)
+            # Optimizer also support specifying per-parameter options. To do this, instead of passing an iterable of Variable s, pass in an iterable of dict s.
+            #! Each of them will define a separate parameter group, and should contain a params key, containing a list of parameters belonging to it. 
+            #! Other keys should match the keyword arguments accepted by the optimizers, and will be used as optimization options for this group.
+            # Adamw doesn't natively support per-parameter-group learning rate scaling through the "lr_scale" key in the parameter group dictionary.
+            # Unless update lr by lr_scale manually.
+            # grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": args.weight_decay})
+            # grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": 0.0})
+
+            lr = args.learning_rate * lr_scale  # Calculate the learning rate for this group
+            grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
+            grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
+
+        return grouped_params
+    
+    def get_value_net_grouped_params(value_net):
+     
+        return [{
+            "params": [p for p in value_net.parameters() if p.requires_grad], 
+            "lr": args.learning_rate * args.value_net_lr_scale,
+            "weight_decay": args.value_weight_decay,
+        }]
+        
+
+    grouped_params = get_model_grouped_params(ddp_model) + get_value_net_grouped_params(ddp_value_net)
+    optimizer = torch.optim.AdamW(grouped_params, lr=args.learning_rate)
 
     total_training_steps = (
         (args.train_num_samples_calvin) // (args.batch_size_calvin * args.world_size)
@@ -596,7 +679,8 @@ def main():
         else:
             if args.multi_exit:
                 if args.use_extra_exit:
-                    train_value_net_one_epoch_calvin_dynamic_exit(
+                    # train_value_net_one_epoch_calvin_dynamic_exit(
+                    train_value_net_one_epoch_calvin_dynamic_exit_debug(
                         args=args,
                         model=ddp_model,
                         value_net=ddp_value_net,

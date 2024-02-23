@@ -53,6 +53,20 @@ class MLPTanhHead(torch.nn.Module):
 
     def forward(self, x):
         return self.mlp(x)
+    
+class MLPNohHeadLight(torch.nn.Module):
+    def __init__(self, hidden_size, output_size, dropout):
+        super().__init__()
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Dropout(dropout), 
+            torch.nn.Linear(hidden_size, 256),
+            torch.nn.ReLU(),
+            torch.nn.Linear(256, output_size)
+        )
+    
+    def forward(self, x):
+        return self.mlp(x)
+
 
 class MLPNohHead(torch.nn.Module):
     def __init__(self, hidden_size, output_size, dropout):
@@ -374,10 +388,14 @@ class DeterministicDecoder(ActionDecoder):
         h_0: Optional[torch.Tensor] = None,
         state_tensor=None,
         return_feature=False,
+        return_aggregate_feature=False,
         with_gripper_logits=False,
     ):
         self.return_feature = return_feature
-    
+        if input_feature.dim() == 4:
+            input_feature = input_feature.reshape(-1, *input_feature.shape[2:]) 
+        
+        
         # reshape
         if input_feature.dim() == 3: # (bs * action_seq_len, lang_len, d)
             if self.fusion_mode == 'two_way':
@@ -444,10 +462,16 @@ class DeterministicDecoder(ActionDecoder):
                 self.rnn_out = x.squeeze(1)
         else:
             raise NotImplementedError
+        
+        if return_aggregate_feature:
+            agg_feat = x
+        
         if self.use_diff:
             return self.rnn_out
         actions = self.actions(x)
         gripper = self.gripper(x, with_logits=with_gripper_logits)
+        if return_aggregate_feature:
+            return actions, gripper, agg_feat
         if self.return_feature:
             return actions, gripper, org_feat
         else:

@@ -303,6 +303,7 @@ class MPTFlamingo(nn.Module):
         dynamic_early_exit=False,
         exit_controller=None,
         return_in_feat=False,
+        return_aggregate_feature=False,
         only_extra_exit=False,
     ):
         """
@@ -376,11 +377,11 @@ class MPTFlamingo(nn.Module):
                 exit_id=exit_id,
             )
         
-        def get_action(head, in_feat, in_state):
+        def get_action(head, in_feat, in_state, return_aggregate_feature=False):
             if isinstance(head, GaussianDecoder):
-                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, with_gripper_logits=with_gripper_logits, act=act, deterministic=deterministic)
+                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits, act=act, deterministic=deterministic)
             else:
-                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, with_gripper_logits=with_gripper_logits)
+                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits)
             return o
         
         # inference: only output action by one specified exit
@@ -431,7 +432,7 @@ class MPTFlamingo(nn.Module):
                 # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
                 rand_layer_feat = rand_layer_feat.flatten(0, 1)
                 # cut off gradient. Loss is used only for training the extra exit, not the backbone.
-                rand_layer_feat = rand_layer_feat.detach()
+                # extra_exit_output = get_action(self.extra_exit, rand_layer_feat.detach(), state_tensor)
                 extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
             else:
                 # we only get the predicted values at the t timestep with input feature from all layers.
@@ -439,12 +440,26 @@ class MPTFlamingo(nn.Module):
                 for t in range(self.window_size):
                     all_layer_feat_t = []
                     for i in range(len(self.lm_exits)+1):
-                        rand_layer_feat_i = deepcopy(rand_layer_feat) # (bs, action_seq_len, lang_len, d)
+                        rand_layer_feat_i = rand_layer_feat # (bs, action_seq_len, lang_len, d)
                         rand_layer_feat_i[:, t] = all_feats[:, t, i] # (bs, action_seq_len, n_exit, lang_len, d)
                         all_layer_feat_t.append(rand_layer_feat_i)
                     all_layer_feat.append(torch.stack(all_layer_feat_t, dim=0))  # (n_exit, bs, action_seq_len, lang_len, d)
-                rand_layer_feat = torch.stack(all_layer_feat, dim=0).detach()  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
-                extra_exit_output = []
+                rand_layer_feat = torch.stack(all_layer_feat, dim=0)  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
+                
+                # input_feat = rand_layer_feat.flatten(2, 3).flatten(0, 1).detach()
+                input_feat = rand_layer_feat.flatten(2, 3).flatten(0, 1)
+                extra_exit_output = get_action(self.extra_exit, input_feat, state_tensor, return_aggregate_feature=return_aggregate_feature) # (action_seq_len * exits * bs, seq_len)
+                
+                def get_output(x):
+                    x = x.reshape(action_seq_len, len(self.lm_exits)+1, bs, action_seq_len, -1)
+                    x = [x[i, :, :, i:i+1]  for i in range(action_seq_len)] # action_seq_len * (exit_num, bs, 1)
+                    x = torch.cat(x, dim=2) #  (exit_num, bs, action_seq_len)
+                    return x
+                extra_exit_output = (
+                    get_output(extra_exit_output[0]), 
+                    (get_output(extra_exit_output[1][0]),  get_output(extra_exit_output[1][1])),
+                    get_output(extra_exit_output[2]), 
+                )
             
             if return_in_feat:
                 return output, exit_outputs, extra_exit_output, rand_layer_feat, rand_layer_indices[:, :, 0, 0, 0]

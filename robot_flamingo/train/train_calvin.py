@@ -326,6 +326,8 @@ def main():
     parser.add_argument("--exit_dropout", type=float, default=0.0, help='')
     parser.add_argument("--exit_decay", action="store_true", default=False)
     parser.add_argument("--use_extra_exit", action="store_true", default=False)
+    # forvalue net
+    # parser.add_argument("--with_value_net", action="store_true", default=False, help='jointly train value net')
 
     args = parser.parse_args()
     

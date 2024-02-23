@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from robot_flamingo.models.action_head import MLPNohHead, lstm_decoder
+from robot_flamingo.models.action_head import MLPNohHead, MLPNohHeadLight, lstm_decoder
 import copy
 from typing import Optional, Tuple
 from tqdm.auto import tqdm
@@ -46,6 +46,87 @@ def get_cast_dtype(precision: str):
     elif precision == "fp16":
         cast_dtype = torch.float16
     return cast_dtype
+
+
+
+class DiffValueHead(nn.Module):
+    # infer the value by considering the agreement between exit features
+    def __init__(
+        self,
+        in_features: int,
+        dropout: float,
+        hidden_size: int = 1024,
+        with_exit_embed=False,
+        with_time_embed=False,
+        num_exits=1,
+        discrete=False,
+        num_bin=100,
+        window_size = 12,
+    ):
+        super().__init__()
+        
+        self.with_exit_embed = with_exit_embed
+        self.with_time_embed = with_time_embed
+        if with_exit_embed:
+            self.embed_exit = torch.nn.Embedding(num_exits, in_features)
+            nn.init.normal_(self.embed_exit.weight, mean=0.0, std=0.02)
+        if with_time_embed:
+            self.embed_time = torch.nn.Embedding(window_size, in_features)
+            nn.init.normal_(self.embed_time.weight, mean=0.0, std=0.02)
+        
+        self.discrete = discrete
+        self.num_bin = num_bin
+        self.dim_out = num_bin if num_bin > 2 else 1 # binary classification loss
+        if discrete:
+            self.head = MLPNohHeadLight(in_features * 2, self.dim_out, dropout)
+            self.boundaries = nn.Parameter(torch.zeros(num_bin+1, dtype=float), requires_grad=False)
+        else:
+            self.head = MLPNohHeadLight(in_features * 2, 1, dropout)
+
+        self.hidden_state = None
+        self.hidden_size = hidden_size
+        self.rnn_out = None
+        
+    def set_bin_boundaries(self, bin_boundaries):
+        assert self.num_bin + 1 == bin_boundaries.shape[0]
+        self.boundaries = nn.Parameter(bin_boundaries, requires_grad=False)
+
+    def forward(  # type: ignore
+        self,
+        feature: torch.Tensor,
+        prev_feature: torch.Tensor,
+        exit_idx: torch.Tensor = None,
+        t_idx: torch.Tensor = None,
+        return_value=False,
+    ):
+
+        # (num_layer, bs, d) --> (num_exit * bs, d)
+        if feature.dim() == 3:
+            feature = feature.reshape(-1, *feature.shape[1:]) 
+            prev_feature = prev_feature.reshape(-1, *prev_feature.shape[1:]) 
+
+        if self.with_time_embed:
+            raise  NotImplementedError
+            time_embeddings = self.embed_time(torch.arange(self.window_size, device=input_feature.device))
+            time_embeddings = time_embeddings.unsqueeze(0).expand(input_feature.shape[0], -1 ,-1)
+            input_feature += time_embeddings
+        if self.with_exit_embed:
+            raise  NotImplementedError
+            exit_embeddings = self.embed_exit(exit_idx) # (bs, action_seq_len, d)
+            input_feature += exit_embeddings
+
+        x = torch.cat([feature, prev_feature], dim=-1)
+
+        if self.discrete:
+            assert not torch.all(self.boundaries==0), 'please set bin boundaries before calling forward'
+            logits = self.head(x)
+            if return_value:
+                return logits_to_expected_value(logits, self.boundaries)
+            else:
+                return logits
+        else:
+            values = self.head(x) # (exits * bs, seq_len, 1)
+            return values    
 
 
 class MLPValueHead(nn.Module):
