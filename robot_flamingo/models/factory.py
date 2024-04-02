@@ -38,7 +38,7 @@ mpt_dict = {
         "lang_encoder_path": "path_to/mpt-7b", 
         "tokenizer_path": "path_to/mpt-7b", 
         "cross_attn_every_n_layers": 4,
-        "openflamingo_checkpoint": "path_to/OpenFlamingo-9B-vitl-mpt7b/checkpoint.pt"
+        "openflamingo_checkpoint": "/mnt/bn/yueyang/archive/OpenFlamingo-9B-vitl-mpt7b.pt"
     },
     "llama_9b": {
         "lang_encoder_path": "path_to/llama-7b-hf-jxu124", 
@@ -185,6 +185,10 @@ def create_model_and_transforms(
                 self.transformer.wte = new_embeddings
         extend_instance(lang_encoder, EmbeddingFnMixin)
     
+    print(
+        f"MPT with {sum(p.numel() for p in lang_encoder.parameters())/1e6:.2f}M parameters"
+    )
+    
     # extend MPT to Mixin (add cross-attention layers to a language model)
     extend_instance(lang_encoder, FlamingoLMMixin)
     
@@ -280,7 +284,20 @@ def create_model_and_transforms(
     # model.action_head.requires_grad_(True)
 
     print(
-        f"Flamingo model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters"
+        f"Vision Enocder with {sum(p.numel() for p in vision_encoder.parameters())/1e6:.2f}M parameters"
+    )
+    print(
+        f"Vision Perciver with {sum(p.numel() for p in model.perceiver.parameters())/1e6:.2f}M parameters"
+    )
+    print(
+        f"{model.early_exit_layer+1}-layer LLM with {sum(p.numel() for p in model.lang_encoder.parameters())/1e6:.2f}M parameters"
+    )
+    print(
+        f"One Action head with {sum(p.numel() for p in model.lm_head.parameters())/1e6:.2f}M parameters"
+    )
+
+    print(
+        f"Flamingo model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)/1e6:.2f}M trainable parameters"
     )
 
     return model, image_processor, text_tokenizer

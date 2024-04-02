@@ -11,9 +11,12 @@ import math
 from collections import deque
 from moviepy.editor import ImageSequenceClip
 import torch
+# from thop import profile
+from fvcore.nn import FlopCountAnalysis
 # This is for using the locally installed repo clone when using slurm
 from calvin_agent.models.calvin_base_model import CalvinBaseModel
 sys.path.insert(0, Path(__file__).absolute().parents[2].as_posix())
+from fvcore.nn import FlopCountAnalysis
 
 from calvin_agent.evaluation.multistep_sequences import get_sequences
 from calvin_agent.evaluation.utils import (
@@ -433,9 +436,18 @@ class ModelWrapper(CalvinBaseModel):
                     assert False, "please update the code for dynamic exit"
                     action = self.model(vision_x=vision_x, lang_x=text_x, attention_mask=mask, state_tensor = state, return_feature=True)
                 else:
+                    eval_time=True
+                    if eval_time:
+                        torch.cuda.synchronize()
+                        cur_time = time.time()                    
+                    
                     action = self.model(vision_x=image_x, lang_x=text_x, attention_mask=mask, vision_gripper = gripper, state_tensor = state, return_feature=True, 
                                         deterministic=True, exit_id=self.exit_id, dynamic_early_exit=self.dynamic_early_exit, exit_controller=self.exit_controller)
-                
+                    
+                    if eval_time:
+                        torch.cuda.synchronize()
+                        print(f"total time: {cur_time-time.time():.4f} seconds")
+                        cur_time = time.time()
                 # if self.model.module.pad_length != -1:
                 #     if self.feature_cache is None:
                 #         self.feature_cache = action.logits[-1]
@@ -729,7 +741,7 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
     elif args.pad_length != -1:
         hist_len = args.pad_length
     
-    if args.eval_exit_mode == 'last':    
+    if args.eval_exit_mode == 'last':   
         if args.rank == 0: 
             if args.use_extra_exit:
                 print("\nEvaluate the extra exit with features from the last layer !\n")

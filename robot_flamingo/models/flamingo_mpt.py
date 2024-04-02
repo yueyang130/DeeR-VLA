@@ -6,6 +6,10 @@ from open_flamingo.src.helpers import PerceiverResampler
 from robot_flamingo.models.action_head import DeterministicDecoder, DiffusionDecoder, FCDecoder, GPTDecoder, GaussianDecoder
 from collections import namedtuple
 from copy import deepcopy
+import time
+import shutil
+from fvcore.nn import FlopCountAnalysis
+from thop import profile
 
 class MPTFlamingo(nn.Module):
     def __init__(
@@ -305,6 +309,7 @@ class MPTFlamingo(nn.Module):
         return_in_feat=False,
         return_aggregate_feature=False,
         only_extra_exit=False,
+        eval_time=False,
     ):
         """
         Forward pass of Flamingo.
@@ -357,6 +362,11 @@ class MPTFlamingo(nn.Module):
                     elif self.fusion_mode == 'vit_concat':
                         self._encode_history_vision_fc_post(vision_x, vision_gripper)
         
+
+        if eval_time:
+            torch.cuda.synchronize()
+            cur_time = time.time()
+    
         if dynamic_early_exit and exit_controller is not None:
             output = self.lang_encoder(
                 input_ids=lang_x,
@@ -367,7 +377,7 @@ class MPTFlamingo(nn.Module):
                 exit_controller = exit_controller,
             )
         else:
-            # when exit_id is None, it behaves as the static LLM forward
+            # when exit_id is None, it behaves as the static LLM forward            
             output = self.lang_encoder(
                 input_ids=lang_x,
                 attention_mask=attention_mask.bool(),
@@ -376,13 +386,32 @@ class MPTFlamingo(nn.Module):
                 output_hidden_states=True,
                 exit_id=exit_id,
             )
+
+        if eval_time:
+            torch.cuda.synchronize()
+            print(f"LLM total time: {cur_time-time.time():.4f} seconds")
         
-        def get_action(head, in_feat, in_state, return_aggregate_feature=False):
+        def get_action(head, in_feat, in_state, return_aggregate_feature=False, eval_flop=False):
+            
+            if eval_flop:
+                vis_per_flop = profile(head, inputs=(in_feat, in_state, return_feature, return_aggregate_feature, with_gripper_logits))[0]
+                print(f'thop action head flops = {vis_per_flop/1e9:.1f}G, ')
+            
+            if eval_time:
+                torch.cuda.synchronize()
+                cur_time = time.time()
+                
             if isinstance(head, GaussianDecoder):
                 o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits, act=act, deterministic=deterministic)
             else:
                 o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits)
+            
+            if eval_time:
+                torch.cuda.synchronize()
+                print(f"action head time: {cur_time-time.time():.4f} seconds")
+                cur_time = time.time()
             return o
+        
         
         # inference: only output action by one specified exit
         if dynamic_early_exit and exit_controller is not None:
@@ -467,7 +496,8 @@ class MPTFlamingo(nn.Module):
                 return output, exit_outputs, extra_exit_output
         else:
             if len(self.lm_exits) > 0:
-                return output, exit_outputs
+                return output, exit_outputs            
+        
         return output
         
     def _encode_vision_x(self, vision_x: torch.Tensor):
@@ -489,16 +519,22 @@ class MPTFlamingo(nn.Module):
         vision_x = rearrange(vision_x, "b T F c h w -> (b T F) c h w")
         with torch.no_grad():
             vision_x = self.vision_encoder.visual(vision_x)[1]
+            if eval_flop:
+                vis_enc_flop = FlopCountAnalysis(self.vision_encoder.visual, vision_x)
+                print(f'vis encoder flops = {vis_enc_flop.total()/1e9:.1f}G, ')
+                
+            
         vision_x = rearrange(vision_x, "(b T F) v d -> b T F v d", b=b, T=T, F=F)
 
         vision_x = self.perceiver(vision_x)  # reshapes to (b, T, n, d)
+
 
         for layer in self.lang_encoder._get_decoder_layers():
             layer.condition_vis_x(vision_x)
 
         return vision_x
 
-    def _encode_vision(self, vision_x: torch.Tensor, state_tensor=None):
+    def _encode_vision(self, vision_x: torch.Tensor, state_tensor=None, eval_flop=False):
         """
         Compute media tokens from vision input by passing it through vision encoder and conditioning language model.
         Args:
@@ -516,7 +552,14 @@ class MPTFlamingo(nn.Module):
 
         vision_x = rearrange(vision_x, "b T F c h w -> (b T F) c h w")
         with torch.no_grad():
+            if eval_flop:
+                vis_enc_flop = FlopCountAnalysis(self.vision_encoder.visual, vision_x).total()
+                print(f'fvcore vis encoder flops = {vis_enc_flop/1e9:.1f}G, ')
+                vis_enc_flop = profile(self.vision_encoder.visual, inputs=(vision_x,))[0]
+                print(f'thop vis encoder flops = {vis_enc_flop/1e9:.1f}G, ')
+            
             vision_x = self.vision_encoder.visual(vision_x)[1]
+            
         vision_x = rearrange(vision_x, "(b T F) v d -> b T F v d", b=b, T=T, F=F)
         return vision_x
 
@@ -544,7 +587,7 @@ class MPTFlamingo(nn.Module):
 
         return vision_x
 
-    def _encode_multi_vision_post_fusion(self, vision_rgb: torch.Tensor, vision_gripper: torch.Tensor, state_tensor=None):
+    def _encode_multi_vision_post_fusion(self, vision_rgb: torch.Tensor, vision_gripper: torch.Tensor, state_tensor=None, eval_flop=False, eval_time=False):
         """
         Compute media tokens from vision input by passing it through vision encoder and conditioning language model.
         Args:
@@ -557,9 +600,40 @@ class MPTFlamingo(nn.Module):
 
         rearrange code based on https://github.com/dhansmair/flamingo-mini
         """
+        if eval_time:
+            torch.cuda.synchronize()
+            cur_time = time.time()
+        
         vision_rgb = self._encode_vision(vision_rgb)
+        
+        if eval_time:
+            torch.cuda.synchronize()
+            print(f"vis rgb encoder time: {cur_time-time.time():.4f} seconds")
+            cur_time = time.time()
+        
         vision_gripper = self._encode_vision(vision_gripper)
+        
+        if eval_time:
+            torch.cuda.synchronize()
+            print(f"vis gripper encoder time: {cur_time-time.time():.4f} seconds")
+            cur_time = time.time()
+
+        if eval_flop:
+            vis_per_flop = FlopCountAnalysis(self.perceiver, vision_rgb).total()
+            print(f'fvflop vis perceiver flops = {vis_per_flop/1e9:.1f}G, ')
+            vis_per_flop = profile(self.perceiver, inputs=(vision_rgb,))[0]
+            print(f'thop vis perceiver flops = {vis_per_flop/1e9:.1f}G, ')
+
+        if eval_time:
+            torch.cuda.synchronize()
+            cur_time = time.time()
+
         vision_rgb = self.perceiver(vision_rgb)
+        
+        if eval_time:
+            torch.cuda.synchronize()
+            print(f"vis rgb perceiver time: {cur_time-time.time():.4f} seconds")
+        
         if self.sep_resampler:
             vision_gripper = self.perceiver_gripper(vision_gripper)
         else:
