@@ -79,8 +79,7 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --multi_execution ${multi_execution} \
     --value_net_ckpt ${value_net_ckpt} \
     --exit_ratio ${exit_ratio} \
-    --workers 1
-    # --workers 1 > ${log_file} 2>&1
+    --workers 1 > ${log_file} 2>&1
 fi
 
 if [ ${use_gripper} -eq 0 ] && [ ${use_state} -eq 0 ]

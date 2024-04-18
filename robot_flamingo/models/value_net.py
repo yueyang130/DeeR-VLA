@@ -7,6 +7,15 @@ from typing import Optional, Tuple
 from tqdm.auto import tqdm
 import math
 
+def get_similarity(f_x1s, f_x2s, detach_f1=False):
+    if detach_f1:
+        f_x1s = f_x1s.detach()
+    f_x1 = F.normalize(f_x1s, p=2., dim=-1, eps=1e-5)
+    f_x2 = F.normalize(f_x2s, p=2., dim=-1, eps=1e-5)
+    # loss = F.mse_loss(f_x1, f_x2, reduction="none").sum(-1).mean(0)
+    sim = (f_x1 * f_x2).sum(-1)
+    return sim
+
 def get_bin_boundaries(target_value_gathered, num_bin):
     # Calculate the quantiles to get the bin boundaries
     quantiles = torch.linspace(0, 1, steps=num_bin + 1, device=target_value_gathered.device)
@@ -452,17 +461,36 @@ class LSTMValueHead(nn.Module):
             values = self.head(x) # (exits * bs, seq_len, 1)
             return values
         
-    
-
+        
+class SimValueNet(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        
+    def forward(  # type: ignore
+        self,
+        input_feature: torch.Tensor,
+    ):
+        if infer:
+            pass
+        # (num_layer, bs * action_seq_len, lang_len, d) --> (num_exit * bs * action_seq_len, lang_len, d)
+        if input_feature.dim() == 4:
+            input_feature = input_feature.reshape(-1, *input_feature.shape[2:])
+        # reshape
+        if input_feature.dim() == 3: # (num_exit * bs * action_seq_len, lang_len, d)
+            input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (num_exit * bs * seq_len, d) maxpooling along lang_seq
+        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (num_exit * bs, seq_len, d)
+        
+        
 class ExitController(torch.nn.Module):
-    def __init__(self, value_net, num_exit, leq=True):
+    def __init__(self, value_net, exit_id_list, exit_interval, leq=True):
         super().__init__()
         self.value_net = value_net
         self.thresholds = None
         self.leq = leq
-        self.num_exit = num_exit
+        self.exit_id_list = exit_id_list
+        self.exit_interval = exit_interval
         # for debug
-        self.history_values = [[] for i in range(num_exit)]
+        # self.history_values = [[] for i in range(num_exit)]
         
     def set_threshold(self, args, model, dataloader, exit_ratio, values=None):  
         if values is None:  
@@ -522,7 +550,7 @@ class ExitController(torch.nn.Module):
         #     count.append((filtered>0).sum()-sum(count))
         # percent = [c / sum(count) for c in count[1:]]    
 
-        self.thresholds = T
+        self.thresholds = {self.exit_id_list[i] : T[i]  for i in range(n_stage)}
         if args.rank == 0:
             print(f'Mean value for each layer:')
             for i in range(n_stage):
@@ -537,7 +565,13 @@ class ExitController(torch.nn.Module):
     def forward(self, x, i):
         assert self.thresholds is not None, "Please set thresholds before calling forward"
         
-        value = self.value_net(x, return_value=True)
+        if isinstance(self.value_net, LSTMValueHead):
+            value = self.value_net(x[i], return_value=True)
+        elif isinstance(self.value_net, SimValueNet):
+            value = get_similarity(x[i], x[i-self.exit_interval])
+            value = value.mean()
+        else:
+            raise NotImplementedError
 
         # self.history_values[i].append(value)
         # if torch.distributed.get_rank() == 0:
@@ -547,11 +581,126 @@ class ExitController(torch.nn.Module):
         #             print(f'{layer=}, count={len(h)}, mean value = {torch.tensor(h).mean():.5f}')
         
         if bool(value <= self.thresholds[i]) is self.leq: # both be true or both be false
-            # Already find the dynamic exit. We need to update hidden state
-            self.value_net.update_memory()
+            if isinstance(self.value_net, LSTMValueHead):
+                # Already find the dynamic exit. We need to update hidden state
+                self.value_net.update_memory()
             return True 
         else:
             return False
+
+@torch.no_grad()
+def generate_sim_values(
+    args,
+    model,
+    value_net,
+    calvin_loader,
+    device_id,
+):
+    
+    num_batches_per_epoch_calvin = calvin_loader.num_batches
+    num_batches_per_epoch = num_batches_per_epoch_calvin
+
+    cast_dtype = get_cast_dtype(args.precision)
+
+    model.eval()
+    value_net.eval()
+
+    # loop through dataloader
+    t = tqdm(
+        enumerate(calvin_loader),
+        disable=args.rank != 0,
+        total=num_batches_per_epoch,
+        initial=0,
+    )
+    t.set_description(f"generate values by similarity")
+    mv_avg_loss = []
+    pred_value_list, target_value_list = [], []
+    for num_steps, batch_calvin in t:
+        global_step = num_steps
+        
+        # put images and labels on device
+        images = (batch_calvin[0].to(device_id, dtype=cast_dtype, non_blocking=True).unsqueeze(2).unsqueeze(2))
+        gripper = (batch_calvin[3].to(device_id, dtype=cast_dtype, non_blocking=True).unsqueeze(2).unsqueeze(2))
+
+        # input_ids is LongTensor and does not require conversion precision
+        # repeat the input_ids to match the sequence length of the images
+        if args.fusion_mode != 'vit_concat':
+            input_ids = batch_calvin[1][0].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, images.shape[1], 1)
+        else:
+            input_ids = batch_calvin[1][0].to(device_id, non_blocking=True)
+        # input_ids = batch_calvin[1][0].to(device_id, non_blocking=True)
+
+        # do the same to the attention mask 
+        if args.fusion_mode != 'vit_concat':
+            attention_mask = batch_calvin[1][1].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, images.shape[1], 1)
+        else:
+            attention_mask = batch_calvin[1][1].to(device_id, non_blocking=True)
+        
+        state_tensor = batch_calvin[4].to(device_id, dtype=cast_dtype, non_blocking=True)
+        robot_obs = batch_calvin[5].to(device_id, dtype=cast_dtype, non_blocking=True)
+        if args.clip_state:
+            state_tensor = torch.cat([state_tensor[..., :6], state_tensor[..., [-1]]], dim=-1)
+        labels = batch_calvin[2].to(device_id, dtype=cast_dtype, non_blocking=True)
+        if args.tcp_rel:
+            if args.multi_step_action == 1:
+                labels = world_to_tcp_frame(labels, state_tensor)
+            else:
+                bs, seq_len = labels.shape[:2]
+                labels = world_to_tcp_frame(labels, robot_obs)
+                labels = labels.view(bs, seq_len, args.multi_step_action, -1)
+        
+        state_tensor = state_tensor.unsqueeze(2).unsqueeze(2)
+
+        # merge the batch and the sequence dimension
+        images = images.flatten(0, 1)
+        gripper = gripper.flatten(0, 1)
+        state_tensor = state_tensor.flatten(0, 1)
+        if args.fusion_mode != 'vit_concat':
+            input_ids = input_ids.flatten(0, 1)
+            attention_mask = attention_mask.flatten(0, 1)
+
+        # [:6] is the joint position and [6:] is the gripper control, which is -1, 1, thus we need to convert it to 0, 1
+        if args.use_hist:
+            labels = labels[:, [-1]]  # only calculate last step action
+        if args.fusion_mode == 'vit_concat':
+            labels = labels[:, -1]
+        labels = [labels[..., :6], (labels[..., 6:] + 1) // 2]
+        # print(f'{args.amp=}')
+       
+        with torch.cuda.amp.autocast(enabled=args.amp), torch.no_grad():
+            if args.head_type == 'deterministic':
+                final_output, exit_outputs = model(
+                    vision_x=images,
+                    lang_x=input_ids,
+                    attention_mask=attention_mask,
+                    # labels=labels,  # loss计算放在外面
+                    vision_gripper=gripper,
+                    state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                    with_gripper_logits=True,
+                )
+                
+                # get joint outputs
+                all_outputs = exit_outputs + [final_output.logits]
+
+            features = torch.stack(final_output.hidden_states, dim=0) 
+            values = value_net(features, return_value=True) # (exits, bs * seq_len, lang_len, 1) -> (exits * bs, seq_len, 1)
+            values = values.reshape(len(all_outputs), -1, values.shape[1]) # (exits, bs, seq_len)
+            target_values = loss_calvin.detach()
+            
+        # record
+        pred_value_list.append(values)  
+        # target_value_list.append(target_values)
+
+
+    pred_value_list = torch.cat(pred_value_list, dim=1)
+    # target_value_list = torch.cat(target_value_list, dim=1)
+    # flatten bs and action length
+    pred_value_list = pred_value_list.flatten(1, 2)
+        
+    # return pred_value_list, target_value_list
+    return pred_value_list, None
+
+
 
 @torch.no_grad()
 def generate_values(
@@ -689,7 +838,7 @@ def generate_values(
                         print(f'Timestep {i+1} mean value {values[:, :, i].mean():.5f}')
                 
                 # remove few timesteps at beginning because they have statistically larger loss
-                values = values[:, :, 4:] 
+                values = values[:, :, 4:]
         
         else:
             with torch.cuda.amp.autocast(enabled=args.amp), torch.no_grad():

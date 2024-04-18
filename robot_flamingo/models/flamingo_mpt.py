@@ -234,7 +234,7 @@ class MPTFlamingo(nn.Module):
                     raise NotImplementedError
                 return lm_head
                 
-            for i in range(0, early_exit_layer, exit_interval):
+            for i in range(exit_interval-1, early_exit_layer, exit_interval):
                 self.lm_exits[i] = get_encoder()
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
             print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one internal exit!')      
@@ -453,16 +453,20 @@ class MPTFlamingo(nn.Module):
             # (bs * action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, n_exit, lang_len, d)
             all_feats = all_feats.reshape(-1, self.window_size, *all_feats.shape[1:]) 
             # (bs, action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, lang_len, d)
-            bs, action_seq_len, n_exit = all_feats.shape[:3]
-            rand_layer_indices = torch.randint(0, n_exit, size=(bs, action_seq_len, 1, 1, 1), device=all_feats.device)
+            bs, action_seq_len, _ = all_feats.shape[:3]
+            # rand_layer_indices = torch.randint(0, n_exit, size=(bs, action_seq_len, 1, 1, 1), device=all_feats.device)
+            exit_ids = list(self.lm_exits.keys())
+            indices = torch.randint(0, len(exit_ids), size=(bs, action_seq_len), device=all_feats.device)
+            rand_layer_indices = torch.tensor([exit_ids[idx] for idx in indices.reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len, 1, 1, 1)
+            
             rand_layer_indices = rand_layer_indices.expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
             rand_layer_feat = torch.gather(all_feats, 2, rand_layer_indices).squeeze(2)     
             if not only_extra_exit:
                 # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
                 rand_layer_feat = rand_layer_feat.flatten(0, 1)
                 # cut off gradient. Loss is used only for training the extra exit, not the backbone.
-                # extra_exit_output = get_action(self.extra_exit, rand_layer_feat.detach(), state_tensor)
-                extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
+                extra_exit_output = get_action(self.extra_exit, rand_layer_feat.detach(), state_tensor)
+                # extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
             else:
                 # we only get the predicted values at the t timestep with input feature from all layers.
                 all_layer_feat = []

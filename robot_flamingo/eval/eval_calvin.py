@@ -21,7 +21,7 @@ from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp, check_loaded_parameters
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-from models.value_net import LSTMValueHead, ExitController, DiffValueHead
+from models.value_net import LSTMValueHead, ExitController, DiffValueHead, SimValueNet
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed)
@@ -329,6 +329,7 @@ def main():
     # timestep dynamic
     parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
     # dynamic early-exit
+    parser.add_argument("--value_type", type=str, default='loss') # loss / sim 
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
     parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
     parser.add_argument("--load_threshold", default=1, type=int)
@@ -534,47 +535,56 @@ def main():
     ddp_model.eval()
     
     if args.eval_exit_mode == 'dynamic':
-        assert args.value_net_ckpt is not None, "Please specify a checkpoint for value net."
-        if args.rank == 0:
-            print(f"Loading value net checkpoint from {args.value_net_ckpt}")
-        value_net_ckpt = torch.load(args.value_net_ckpt, map_location="cpu")
+        if args.value_type == 'loss':
+            assert args.value_net_ckpt is not None, "Please specify a checkpoint for value net."
+            if args.rank == 0:
+                print(f"Loading value net checkpoint from {args.value_net_ckpt}")
+            value_net_ckpt = torch.load(args.value_net_ckpt, map_location="cpu")
+            
+            readout_args(args, value_net_ckpt, "with_exit_embed", False)
+            readout_args(args, value_net_ckpt, "discrete", False)
+            readout_args(args, value_net_ckpt, "num_bin", 100)
+            
+            num_exit = model.get_exit_num()
+            # value_net = LSTMValueHead(
+            #     in_features=model.lm_head.in_features, 
+            #     window_size=args.eval_hist_size,
+            #     dropout=0.0,
+            #     hidden_size=model.lm_head.hidden_size,
+            #     fusion_mode=args.fusion_mode, 
+            #     use_state=args.use_state, 
+            #     pooling=args.pooling,
+            #     with_exit_embed=args.with_exit_embed,
+            #     num_exits=num_exit,
+            #     discrete=args.discrete,
+            #     num_bin=args.num_bin,   
+            # )
+            value_net = DiffValueHead(
+            in_features=1024, 
+            window_size=args.eval_hist_size,
+            dropout=0.0,
+            hidden_size=model.lm_head.hidden_size,
+            with_exit_embed=args.with_exit_embed,
+            # with_time_embed=args.with_time_embed,
+            with_time_embed=False,
+            num_exits=model.get_exit_num(),
+            discrete=args.discrete,
+            num_bin=args.num_bin,
+            )
+            
+            value_net_ckpt_dict = {k.replace('module.', ''): v for k, v in value_net_ckpt["model_state_dict"].items()} # remove ddp prefix
+            value_net_ckpt_dict = {k.replace('value_net.', 'head.'): v for k, v in value_net_ckpt_dict.items()} # Be compatible with previous value_net code
+            value_net.load_state_dict(value_net_ckpt_dict, True)
+            
+            exit_controller = ExitController(value_net, num_exit, exit_id_list=model.get_all_exit_idx(), leq=True)
         
-        readout_args(args, value_net_ckpt, "with_exit_embed", False)
-        readout_args(args, value_net_ckpt, "discrete", False)
-        readout_args(args, value_net_ckpt, "num_bin", 100)
-        
-        num_exit = model.get_exit_num()
-        # value_net = LSTMValueHead(
-        #     in_features=model.lm_head.in_features, 
-        #     window_size=args.eval_hist_size,
-        #     dropout=0.0,
-        #     hidden_size=model.lm_head.hidden_size,
-        #     fusion_mode=args.fusion_mode, 
-        #     use_state=args.use_state, 
-        #     pooling=args.pooling,
-        #     with_exit_embed=args.with_exit_embed,
-        #     num_exits=num_exit,
-        #     discrete=args.discrete,
-        #     num_bin=args.num_bin,   
-        # )
-        value_net = DiffValueHead(
-        in_features=1024, 
-        window_size=args.eval_hist_size,
-        dropout=0.0,
-        hidden_size=model.lm_head.hidden_size,
-        with_exit_embed=args.with_exit_embed,
-        # with_time_embed=args.with_time_embed,
-        with_time_embed=False,
-        num_exits=model.get_exit_num(),
-        discrete=args.discrete,
-        num_bin=args.num_bin,
-        )
-        
-        value_net_ckpt_dict = {k.replace('module.', ''): v for k, v in value_net_ckpt["model_state_dict"].items()} # remove ddp prefix
-        value_net_ckpt_dict = {k.replace('value_net.', 'head.'): v for k, v in value_net_ckpt_dict.items()} # Be compatible with previous value_net code
-        value_net.load_state_dict(value_net_ckpt_dict, True)
-        
-        exit_controller = ExitController(value_net, num_exit, leq=True)
+        elif args.value_type == 'sim':
+            value_net = SimValueNet()
+            exit_controller = ExitController(value_net, num_exit, exit_id_list=model.get_all_exit_idx(), leq=True)
+            
+        else:
+            raise NotImplementedError
+            
         exit_controller = exit_controller.to(device_id)
         exit_controller.eval()
         ddp_exit_controller = DDP(exit_controller, device_ids=[device_id])

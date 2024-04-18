@@ -27,7 +27,18 @@ ckpt_names = [os.path.basename(path) for path in glob.glob(search_path)]
 ckpt_names.sort(reverse=True)
 ckpt_names = ckpt_names[:1]
 ckpt_names = [
-    'checkpoint_gripper_post_hist_1__exit_layer_-1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.001_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.01_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.001_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    # 'proj2_distill0amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    # 'proj2_distill1e-3amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.001_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.001_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_11_multi-exit_uniform_interval=2_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_cosine_4.pth',
+    
 ]
 
 print(ckpt_names)
@@ -50,8 +61,10 @@ for ckpt_name in ckpt_names:
         prefix += '_exit'
         prefix += f'_{args.multi_execution}_execution'
             
-        # log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
-        log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(os.path.basename(value_net_ckpt_path).split('.')[:-1]))
+        if args.eval_exit_mode != 'dynamic':
+            log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
+        else:
+            log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(os.path.basename(value_net_ckpt_path).split('.')[:-1]))
         if os.path.exists(log_file): 
             print(f'skip {log_file}')
             continue

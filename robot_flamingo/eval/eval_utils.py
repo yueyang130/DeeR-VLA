@@ -436,7 +436,7 @@ class ModelWrapper(CalvinBaseModel):
                     assert False, "please update the code for dynamic exit"
                     action = self.model(vision_x=vision_x, lang_x=text_x, attention_mask=mask, state_tensor = state, return_feature=True)
                 else:
-                    eval_time=True
+                    eval_time=False
                     if eval_time:
                         torch.cuda.synchronize()
                         cur_time = time.time()                    

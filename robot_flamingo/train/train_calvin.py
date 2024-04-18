@@ -135,6 +135,11 @@ def main():
         type=str,
     )
     parser.add_argument(
+        "--wandb_note",
+        type=str,
+        default='',
+    )
+    parser.add_argument(
         "--save_checkpoints_to_wandb",
         default=False,
         action="store_true",
@@ -326,7 +331,8 @@ def main():
     parser.add_argument("--exit_dropout", type=float, default=0.0, help='')
     parser.add_argument("--exit_decay", action="store_true", default=False)
     parser.add_argument("--use_extra_exit", action="store_true", default=False)
-    # forvalue net
+    parser.add_argument("--feat_distill_coef", type=float, default=0.0, help='use feature distillation if coef is greater than 0')
+    # for value net
     # parser.add_argument("--with_value_net", action="store_true", default=False, help='jointly train value net')
 
     args = parser.parse_args()
@@ -503,15 +509,16 @@ def main():
             grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
             grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
 
-        return grouped_params
+        return grouped_params 
 
         
     args.learning_rate = args.learning_rate * args.batch_size_calvin / 6 # adaptive lr
     optimizer = torch.optim.AdamW(get_grouped_params(ddp_model), lr=args.learning_rate)
 
-    total_training_steps = (
-        (args.train_num_samples_calvin) // (args.batch_size_calvin * args.world_size)
-    ) * args.num_epochs
+    # total_training_steps = (
+    #     (args.train_num_samples_calvin) // (args.batch_size_calvin * args.world_size)
+    # ) * args.num_epochs
+    total_training_steps = calvin_dataset.dataloader.num_batches * args.num_epochs
 
     if args.rank == 0:
         print(f"Total training steps: {total_training_steps}")

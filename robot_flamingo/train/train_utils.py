@@ -11,7 +11,7 @@ import itertools
 from einops import rearrange
 from torch.cuda.amp import GradScaler
 import os
-from models.value_net import value_to_bin_index, get_bin_boundaries
+from models.value_net import value_to_bin_index, get_bin_boundaries, get_similarity
 
 def get_cast_dtype(precision: str):
     cast_dtype = None
@@ -102,7 +102,7 @@ def save_value_net_ckpt(args, ddp_value_net, optimizer, lr_scheduler, epoch, ste
             os.remove(ckpt_path)
 
 def get_ckpt_prefix(args, train_value=False):
-    ckpt_name = ''
+    ckpt_name = args.wandb_note
     
     if args.use_gripper:
         ckpt_name += '{}_checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
@@ -112,6 +112,8 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'multi-exit_'
         ckpt_name += args.exit_weight
         ckpt_name += '_interval={}_'.format(args.exit_interval)
+    # if args.feat_distill_coef > 0:
+        ckpt_name += 'distill={}_'.format(args.feat_distill_coef)
     if args.use_extra_exit:
         ckpt_name += 'extra-exit_'
     if args.exit_lr_scale != 1.0:
@@ -900,20 +902,23 @@ def train_one_epoch_calvin_multi_exit(
                     vision_gripper=gripper,
                     state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
                     with_gripper_logits=True,
+                    # return_feature = True,
+                    return_feature = False,
                 )
                 
                 if args.use_extra_exit:
                     final_output, exit_outputs, extra_exit_output = o[0], o[1], o[2]
-                    features, exit_idx = o[3], o[4]
+                    # features, exit_idx = o[3], o[4]
                     all_outputs = exit_outputs + [final_output.logits] + [extra_exit_output]
                 else:
                     final_output, exit_outputs = o[0], o[1]
                     # get joint outputs
                     all_outputs = exit_outputs + [final_output.logits]
                 
-                num_action_list, gripper_logit_list = [], []
+                num_action_list, gripper_logit_list, proj_feat_list = [], [], []
                 for output in all_outputs:
                     num_actions, bin_gripper = output[0], output[1]
+                    # proj_feat =  output[2]
                     bin_actions, bin_logits = bin_gripper
                     if args.multi_step_action != 1:
                         bs, seq_len = num_actions.shape[:2]
@@ -922,6 +927,10 @@ def train_one_epoch_calvin_multi_exit(
                         bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
                     num_action_list.append(num_actions)
                     gripper_logit_list.append(bin_logits)
+                    # proj_feat_list.append(proj_feat)
+                
+                # if args.use_extra_exit:
+                #     proj_feat_list = proj_feat_list[:-1]
 
                 # get action loss per head type
                 num_actions = torch.stack(num_action_list, dim=0)
@@ -971,6 +980,29 @@ def train_one_epoch_calvin_multi_exit(
             weights = get_exit_weights(args.exit_weight, len(all_outputs), args.use_extra_exit, device=loss_calvin.device)
             loss_calvin *= weights
             loss_calvin = loss_calvin.sum() # since weights are normalzied, thus sum losses of all exits
+            
+            # feature distillation
+            #! take lots of GPU memory dut to huge size of hidden states
+            # feats = final_output.hidden_states # n_exit x (bs * action_seq_len, lang_len, d)
+            # last_feat = feats[-1].unsqueeze(0) # (1, bs * action_seq_len, lang_len, d)
+            # prev_feats = torch.stack(feats[:-1], dim=0) # (n_exit - 1, bs * action_seq_len, lang_len, d)
+            
+            # last_feat = torch.max(last_feat, dim=-2)[0]
+            # prev_feats = torch.max(prev_feats, dim=-2)[0] # (n_exit - 1, bs * action_seq_len, d)
+            
+            # last_feat = proj_feat_list[-1].unsqueeze(0)
+            # prev_feats = torch.stack(proj_feat_list[:-1], dim=0)
+            
+            # sim = get_similarity(last_feat, prev_feats, detach_f1=True) # (n_exit - 1, bs * action_seq_len)
+            # sim = sim.mean(dim=(1,2)) # (n_exit - 1,)
+            # loss_distill = - sim.mean()
+            
+            # loss_distill = nn.functional.mse_loss(prev_feats, last_feat.detach(), reduction='none').mean(dim=(1,2))
+            
+            if args.feat_distill_coef > 0:
+                loss_calvin += loss_distill * args.feat_distill_coef
+            else:
+                 loss_distill = 0
              
             divided_loss_calvin = loss_calvin / args.gradient_accumulation_steps
 
@@ -1059,9 +1091,8 @@ def train_one_epoch_calvin_multi_exit(
                 # )
                 step_time_m.reset()
                 data_time_m.reset()
-
-                wandb.log(
-                    {
+                
+                log_dict = {
                          "lr": optimizer.param_groups[0]["lr"],
                          "exit_lr": optimizer.param_groups[2]["lr"],
                         "loss_calvin": divided_loss_calvin.item(),
@@ -1069,6 +1100,7 @@ def train_one_epoch_calvin_multi_exit(
                         "loss_calvin_num": loss_calvin_num.mean().item(),
                         **{f"loss_calvin_bin_{i}": x.item() for i, x in enumerate(loss_calvin_bin_list)},
                         **{f"loss_calvin_num_{i}": x.item() for i, x in enumerate(loss_calvin_num_list)},
+                        # **{f"feat_sim_{i}": x.item() for i, x in enumerate(sim)},
                         "extra_exit_loss_bin": extra_exit_loss_bin.item(),
                         "extra_exit_loss_num": extra_exit_loss_num.item(),
                         "mse": loss_mse.item(),
@@ -1076,7 +1108,13 @@ def train_one_epoch_calvin_multi_exit(
                         "mean_std": std.mean().item(),
                         "global_step": global_step,
                         "scale_factor": scaler.get_scale(),
-                    },
+                    }
+                
+                if args.feat_distill_coef > 0:
+                    log_dict['loss_distill'] = loss_distill.mean().item()
+
+                wandb.log(
+                    log_dict,
                     commit=True,
                 )
 
@@ -2673,6 +2711,7 @@ def train_value_net_one_epoch_calvin_dynamic_exit_debug(
                 plt.savefig(f'vis/value_dist_{os.path.basename(args.calvin_dataset)}_{t=}_bin50.jpg')
                 plt.close()
                 # plot the distribution     
+
 
 def cumulative_link_loss(y_pred, y_true):
     # y_pred: predictions, a tensor of shape (batch_size, num_classes)

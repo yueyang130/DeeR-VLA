@@ -318,7 +318,8 @@ class DeterministicDecoder(ActionDecoder):
         history_len = None,
         out_features: int = 6,
         hidden_size: int = 1024,
-        num_layers: int = 4,
+        num_projection_layers : int = 2,
+        num_layers: int = 4, # move two layers to projection
         policy_rnn_dropout_p: float = 0.1,
         use_diff=False,
         last_action=False,
@@ -355,8 +356,24 @@ class DeterministicDecoder(ActionDecoder):
             history_len = window_size
         self.history_len = history_len
         self.history_memory = []
+        
+        # self.projection = [nn.Sequential(
+        #     nn.Linear(in_features, hidden_size),
+        #     nn.ReLU(inplace=True)
+        # )]
+        # self.projection.extend([
+        #     nn.Sequential(
+        #         nn.Linear(hidden_size, hidden_size),
+        #         nn.ReLU(inplace=True)
+        #     )
+        #     for _ in range(num_projection_layers - 1)
+        # ])
+        # self.projection = nn.Sequential(*self.projection)
+        
+        
         self.rnn = lstm_decoder
         self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p)
+        # self.rnn = self.rnn(hidden_size, hidden_size, num_layers, policy_rnn_dropout_p)
         self.use_diff = use_diff
         self.fusion_mode = fusion_mode
         if not use_diff:
@@ -413,9 +430,15 @@ class DeterministicDecoder(ActionDecoder):
             else:
                 input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (bs * seq_len, d) maxpooling along lang_seq
         input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (bs, seq_len, d)
+        
+        # project
+        # input_feature = self.projection(input_feature)
+        
         if self.return_feature:
-            org_feat = copy.deepcopy(input_feature) 
-            org_feat = org_feat.view(self.window_size, org_feat.shape[-1])
+            # org_feat = copy.deepcopy(input_feature)
+            org_feat = input_feature
+            if org_feat.dim() == 2 or org_feat.dim() == 3 and org_feat.shape[1] == 1:
+                org_feat = org_feat.view(self.window_size, org_feat.shape[-1])
 
         if state_tensor is not None and self.use_state:
             arm_state = state_tensor[..., :6] # b,len,state_dim-1
