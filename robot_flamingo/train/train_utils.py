@@ -31,7 +31,7 @@ def get_autocast(precision):
     else:
         return suppress
     
-def save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, step):
+def save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, step, extra_optimizer=None, extra_lr_scheduler=None):
     if not os.path.exists(args.run_name):
         os.makedirs(args.run_name)
 
@@ -51,6 +51,10 @@ def save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, step):
         "optimizer_state_dict": optimizer.state_dict(),
         "lr_scheduler_state_dict": lr_scheduler.state_dict(),
     }
+    if extra_optimizer:
+        checkpoint_dict['extra_optimizer_state_dict'] = extra_optimizer.state_dict(),
+    if extra_lr_scheduler:
+        checkpoint_dict['extra_lr_scheduler_state_dict'] = extra_lr_scheduler.state_dict()
 
     ckpt_name = get_ckpt_name(args, step)
     ckpt_path = os.path.join(args.run_name, ckpt_name)
@@ -102,17 +106,26 @@ def save_value_net_ckpt(args, ddp_value_net, optimizer, lr_scheduler, epoch, ste
             os.remove(ckpt_path)
 
 def get_ckpt_prefix(args, train_value=False):
-    ckpt_name = args.wandb_note
+    ckpt_name = args.wandb_note + '_' if args.wandb_note else ''
     
-    if args.use_gripper:
-        ckpt_name += '{}_checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
-    else:
-        ckpt_name += '{}_checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+    if hasattr(args, 'exit_strategy'):
+        ckpt_name += 'strategy={}_'.format(args.exit_strategy)
+        if args.exit_strategy == 'joint':
+            ckpt_name += 'frq={}_'.format(args.llm_update_freq)
+        if args.exit_strategy == 'pre':
+            ckpt_name += '{}+{}_'.format(args.num_exit_epochs, args.num_joint_epochs)
+        if args.exit_strategy == 'post':
+            ckpt_name += '{}+{}_'.format(args.num_joint_epochs, args.num_exit_epochs)           
+    # if args.use_gripper:
+    #     ckpt_name += '{}_checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+    # else:
+    #     ckpt_name += '{}_checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
+    ckpt_name += 'exit_layer_{}_'.format(args.early_exit_layer)
     if args.multi_exit:
         ckpt_name += 'multi-exit_'
         ckpt_name += args.exit_weight
         ckpt_name += '_interval={}_'.format(args.exit_interval)
-    # if args.feat_distill_coef > 0:
+    if args.feat_distill_coef > 0:
         ckpt_name += 'distill={}_'.format(args.feat_distill_coef)
     if args.use_extra_exit:
         ckpt_name += 'extra-exit_'
@@ -800,6 +813,7 @@ def train_one_epoch_calvin_multi_exit(
     lr_scheduler,
     device_id,
     wandb,
+    only_train_head = False,
     value_net = None,
 ):
     
@@ -904,6 +918,7 @@ def train_one_epoch_calvin_multi_exit(
                     with_gripper_logits=True,
                     # return_feature = True,
                     return_feature = False,
+                    no_backbone_grad=only_train_head,
                 )
                 
                 if args.use_extra_exit:
@@ -1093,8 +1108,8 @@ def train_one_epoch_calvin_multi_exit(
                 data_time_m.reset()
                 
                 log_dict = {
-                         "lr": optimizer.param_groups[0]["lr"],
-                         "exit_lr": optimizer.param_groups[2]["lr"],
+                        "lr": 0 if only_train_head else optimizer.param_groups[0]["lr"],
+                        "exit_lr": optimizer.param_groups[0]["lr"] if only_train_head else optimizer.param_groups[2]["lr"],
                         "loss_calvin": divided_loss_calvin.item(),
                         "loss_calvin_bin": loss_calvin_bin.mean().item(),
                         "loss_calvin_num": loss_calvin_num.mean().item(),
@@ -1130,6 +1145,367 @@ def train_one_epoch_calvin_multi_exit(
         if args.save_every_iter != -1 and global_step % args.save_every_iter == 0 and global_step > 0:
             if args.rank == 0:
                 save_ckpt(args, model, optimizer, lr_scheduler, epoch, global_step)
+
+
+def train_one_epoch_calvin_multi_exit_joint_strategy(
+    args,
+    model,
+    epoch,
+    calvin_loader,
+    tokenizer,
+    llm_optimizer,
+    exit_optimizer,
+    llm_lr_scheduler,
+    exit_lr_scheduler,
+    device_id,
+    wandb,
+    value_net = None,
+):
+    
+    num_batches_per_epoch_calvin = calvin_loader.num_batches
+
+    num_batches_per_epoch = num_batches_per_epoch_calvin
+    total_training_steps = num_batches_per_epoch * args.num_epochs
+
+    autocast = get_autocast(args.precision)
+    cast_dtype = get_cast_dtype(args.precision)
+    device_num = int(torch.distributed.get_world_size())
+    scaler = GradScaler(enabled='amp' in args.precision, growth_interval=int(4000/device_num))
+
+    media_token_id = tokenizer("<image>", add_special_tokens=False)["input_ids"][-1]
+    endofchunk_token_id = tokenizer("<|endofchunk|>", add_special_tokens=False)[
+        "input_ids"
+    ][-1]
+
+    model.train()
+    if value_net:
+        value_net.train()
+
+    # setup logging
+    step_time_m = (
+        AverageMeter()
+    )  # time for one optimizer step (> 1 batch if using gradient accum)
+    data_time_m = (
+        AverageMeter()
+    )  # avg time to load one batch of both calvin (= 1 batch regardless of gradient accum)
+    end = time.time()
+
+    # loop through dataloader
+    t = tqdm(
+        enumerate(calvin_loader),
+        disable=args.rank != 0,
+        total=total_training_steps,
+        initial=(epoch * num_batches_per_epoch),
+    )
+    t.set_description(f"epoch {epoch+1}/{args.num_epochs}")
+    mv_avg_loss = []
+    for num_steps, batch_calvin in t:
+        if num_steps % args.llm_update_freq == 0:
+            only_train_head = False # update llm and exits
+        else:
+            only_train_head = True # only update exits
+        
+        data_time_m.update(time.time() - end)
+        global_step = num_steps + epoch * num_batches_per_epoch
+        
+        # put images and labels on device
+        images = (batch_calvin[0].to(device_id, dtype=cast_dtype, non_blocking=True).unsqueeze(2).unsqueeze(2))
+        gripper = (batch_calvin[3].to(device_id, dtype=cast_dtype, non_blocking=True).unsqueeze(2).unsqueeze(2))
+
+        # input_ids is LongTensor and does not require conversion precision
+        # repeat the input_ids to match the sequence length of the images
+        if args.fusion_mode != 'vit_concat':
+            input_ids = batch_calvin[1][0].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, images.shape[1], 1)
+        else:
+            input_ids = batch_calvin[1][0].to(device_id, non_blocking=True)
+        # input_ids = batch_calvin[1][0].to(device_id, non_blocking=True)
+
+        # do the same to the attention mask 
+        if args.fusion_mode != 'vit_concat':
+            attention_mask = batch_calvin[1][1].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, images.shape[1], 1)
+        else:
+            attention_mask = batch_calvin[1][1].to(device_id, non_blocking=True)
+        
+        state_tensor = batch_calvin[4].to(device_id, dtype=cast_dtype, non_blocking=True)
+        robot_obs = batch_calvin[5].to(device_id, dtype=cast_dtype, non_blocking=True)
+        if args.clip_state:
+            state_tensor = torch.cat([state_tensor[..., :6], state_tensor[..., [-1]]], dim=-1)
+        labels = batch_calvin[2].to(device_id, dtype=cast_dtype, non_blocking=True)
+        if args.tcp_rel:
+            if args.multi_step_action == 1:
+                labels = world_to_tcp_frame(labels, state_tensor)
+            else:
+                bs, seq_len = labels.shape[:2]
+                labels = world_to_tcp_frame(labels, robot_obs)
+                labels = labels.view(bs, seq_len, args.multi_step_action, -1)
+        
+        state_tensor = state_tensor.unsqueeze(2).unsqueeze(2)
+
+        # merge the batch and the sequence dimension
+        images = images.flatten(0, 1)
+        gripper = gripper.flatten(0, 1)
+        state_tensor = state_tensor.flatten(0, 1)
+        if args.fusion_mode != 'vit_concat':
+            input_ids = input_ids.flatten(0, 1)
+            attention_mask = attention_mask.flatten(0, 1)
+
+        # [:6] is the joint position and [6:] is the gripper control, which is -1, 1, thus we need to convert it to 0, 1
+        if args.use_hist:
+            labels = labels[:, [-1]]  # only calculate last step action
+        if args.fusion_mode == 'vit_concat':
+            labels = labels[:, -1]
+        labels = [labels[..., :6], (labels[..., 6:] + 1) // 2]
+
+        with autocast():
+            if args.head_type == 'deterministic':
+                o = model(
+                    vision_x=images,
+                    lang_x=input_ids,
+                    attention_mask=attention_mask,
+                    # labels=labels,  # loss计算放在外面
+                    vision_gripper=gripper,
+                    state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                    with_gripper_logits=True,
+                    # return_feature = True,
+                    return_feature = False,
+                    no_backbone_grad=only_train_head,
+                )
+                
+                if args.use_extra_exit:
+                    final_output, exit_outputs, extra_exit_output = o[0], o[1], o[2]
+                    # features, exit_idx = o[3], o[4]
+                    all_outputs = exit_outputs + [final_output.logits] + [extra_exit_output]
+                else:
+                    final_output, exit_outputs = o[0], o[1]
+                    # get joint outputs
+                    all_outputs = exit_outputs + [final_output.logits]
+                
+                num_action_list, gripper_logit_list, proj_feat_list = [], [], []
+                for output in all_outputs:
+                    num_actions, bin_gripper = output[0], output[1]
+                    # proj_feat =  output[2]
+                    bin_actions, bin_logits = bin_gripper
+                    if args.multi_step_action != 1:
+                        bs, seq_len = num_actions.shape[:2]
+                        num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                        # bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                        bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
+                    num_action_list.append(num_actions)
+                    gripper_logit_list.append(bin_logits)
+                    # proj_feat_list.append(proj_feat)
+                
+                # if args.use_extra_exit:
+                #     proj_feat_list = proj_feat_list[:-1]
+
+                # get action loss per head type
+                num_actions = torch.stack(num_action_list, dim=0)
+                loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0][None], reduction='none').mean(-1)
+                # print(f'{loss_calvin_num.shape=}')
+                
+                loss_mse = loss_calvin_num.mean()
+                loss_mle = torch.tensor([.0])
+                std = torch.tensor([.0])
+            elif args.head_type == 'gaussian':
+                raise NotImplementedError("Please fix the bug in gaussian policy in single exit before running multi-exit gaussian policy!")
+
+        # compute loss
+        # if args.rank == 0:
+            # print(len(output.hidden_states)) # number of attention layers (24 for MPT-1B)
+            # Note: the dim of language tokens in a task is the token dim of Transformer since Flamingo is for visual understanding
+            # Then the dim of action seqence is aggregated by LSTM head for decision.
+            # print(output.hidden_states[0].shape, output.hidden_states[-1].shape)  # (bs * action_seq_len, lang_len, d)
+            # print(output.hidden_states[0].requires_grad)
+            # print(output.logits[0].shape) # (bs, action_seq_len, 6)
+            # print(output.logits[0].requires_grad) # (bs, action_seq_len, 6)
+            # print(output.logits[1].shape) # (bs, action_seq_len, 1)
+            # print(labels[0].shape)
+            # print(labels[1].shape)
+
+        
+        # print(f'{bin_actions.shape=}, {bin_logits.shape=}')
+
+        with autocast():
+            # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
+            bin_logits = torch.stack(gripper_logit_list, dim=0)
+            bin_targets = torch.stack([labels[1]] * len(all_outputs), dim=0)
+            loss_calvin_bin = torch.nn.functional.binary_cross_entropy_with_logits(bin_logits, bin_targets, reduction='none').mean(-1)
+            # print(f'{loss_calvin_num.shape=}')
+        
+            if args.head_type == 'deterministic':
+                if args.real_data:
+                    loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
+                else:
+                    loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
+            elif args.head_type == 'gaussian':
+                loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
+            
+            # get mean for every exit
+            dim = loss_calvin.dim()
+            loss_calvin = loss_calvin.mean(dim=tuple(range(1, dim)))
+            weights = get_exit_weights(args.exit_weight, len(all_outputs), args.use_extra_exit, device=loss_calvin.device)
+            loss_calvin *= weights
+            loss_calvin = loss_calvin.sum() # since weights are normalzied, thus sum losses of all exits
+            
+            # feature distillation
+            #! take lots of GPU memory dut to huge size of hidden states
+            # feats = final_output.hidden_states # n_exit x (bs * action_seq_len, lang_len, d)
+            # last_feat = feats[-1].unsqueeze(0) # (1, bs * action_seq_len, lang_len, d)
+            # prev_feats = torch.stack(feats[:-1], dim=0) # (n_exit - 1, bs * action_seq_len, lang_len, d)
+            
+            # last_feat = torch.max(last_feat, dim=-2)[0]
+            # prev_feats = torch.max(prev_feats, dim=-2)[0] # (n_exit - 1, bs * action_seq_len, d)
+            
+            # last_feat = proj_feat_list[-1].unsqueeze(0)
+            # prev_feats = torch.stack(proj_feat_list[:-1], dim=0)
+            
+            # sim = get_similarity(last_feat, prev_feats, detach_f1=True) # (n_exit - 1, bs * action_seq_len)
+            # sim = sim.mean(dim=(1,2)) # (n_exit - 1,)
+            # loss_distill = - sim.mean()
+            
+            # loss_distill = nn.functional.mse_loss(prev_feats, last_feat.detach(), reduction='none').mean(dim=(1,2))
+            
+            if args.feat_distill_coef > 0:
+                loss_calvin += loss_distill * args.feat_distill_coef
+            else:
+                 loss_distill = 0
+             
+            divided_loss_calvin = loss_calvin / args.gradient_accumulation_steps
+
+            #### BACKWARD PASS ####
+            loss = (
+                divided_loss_calvin * args.loss_multiplier_calvin
+            )
+            
+        #### LOG #####
+        if args.use_extra_exit:
+            loss_calvin_bin_list = loss_calvin_bin[:-1].mean(dim=tuple(range(1, dim)))
+            loss_calvin_num_list = loss_calvin_num[:-1].mean(dim=tuple(range(1, dim)))
+            extra_exit_loss_bin = loss_calvin_bin[-1].mean()
+            extra_exit_loss_num = loss_calvin_num[-1].mean()
+        else:
+            loss_calvin_bin_list = loss_calvin_bin.mean(dim=tuple(range(1, dim)))
+            loss_calvin_num_list = loss_calvin_num.mean(dim=tuple(range(1, dim)))
+            extra_exit_loss_bin = torch.tensor([.0])
+            extra_exit_loss_num = torch.tensor([.0])
+        
+            
+        mv_avg_loss.append(loss.item())
+        
+        if 'amp' in args.precision:
+            # scaler.scale(loss).backward(retain_graph=True)
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        #### MASK GRADIENTS FOR EMBEDDINGS ####
+        # Note (anas): Do not apply weight decay to embeddings as it will break this function.
+        def mask_embedding(m):
+            if isinstance(m, torch.nn.Embedding) and m.weight.requires_grad and m.weight.grad is not None:
+                zero_mask = torch.zeros_like(m.weight.grad)
+                zero_mask[media_token_id] = torch.ones_like(zero_mask[media_token_id])
+                zero_mask[endofchunk_token_id] = torch.ones_like(
+                    zero_mask[endofchunk_token_id]
+                )
+                m.weight.grad = m.weight.grad * zero_mask
+
+        # model.apply(mask_embedding)
+
+        # unscale grad. Thus clip with original threshold
+        if 'amp' in args.precision:
+            scaler.unscale_(exit_optimizer)
+            if not only_train_head:
+                scaler.unscale_(llm_optimizer)
+                
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+        # step optimizer and log
+        if (((num_steps + 1) % args.gradient_accumulation_steps) == 0) or (
+            num_steps == num_batches_per_epoch - 1
+        ):
+            if 'amp' in args.precision:
+                scaler.step(exit_optimizer)
+                if not only_train_head:
+                    scaler.step(llm_optimizer)
+                scaler.update()
+            else:
+                exit_optimizer.step()
+                if not only_train_head:
+                    exit_optimizer.step()
+                
+            exit_lr_scheduler.step()
+            exit_optimizer.zero_grad()
+            if not only_train_head:
+                llm_lr_scheduler.step()
+                llm_optimizer.zero_grad()
+
+            # step time and reset end outside of rank 0
+            step_time_m.update(time.time() - end)
+            end = time.time()
+
+            if args.rank == 0 and args.report_to_wandb:
+                # compute within rank 0
+                calvin_samples_per_second = (
+                    args.gradient_accumulation_steps
+                    * args.batch_size_calvin
+                    * args.world_size
+                    / step_time_m.val
+                )
+                calvin_samples_per_second_per_gpu = (
+                    args.gradient_accumulation_steps
+                    * args.batch_size_calvin
+                    / step_time_m.val
+                )
+
+                # wandb.log(
+                #     {
+                #         "data_time": data_time_m.avg,
+                #         "step_time": step_time_m.avg,
+                #         "calvin_samples_per_second": calvin_samples_per_second,
+                #         "calvin_samples_per_second_per_gpu": calvin_samples_per_second_per_gpu,
+                #     },
+                #     commit=False,
+                # )
+                step_time_m.reset()
+                data_time_m.reset()
+                
+                log_dict = {
+                        "lr": llm_optimizer.param_groups[0]["lr"],
+                        "exit_lr": exit_optimizer.param_groups[0]["lr"],
+                        "loss_calvin": divided_loss_calvin.item(),
+                        "loss_calvin_bin": loss_calvin_bin.mean().item(),
+                        "loss_calvin_num": loss_calvin_num.mean().item(),
+                        **{f"loss_calvin_bin_{i}": x.item() for i, x in enumerate(loss_calvin_bin_list)},
+                        **{f"loss_calvin_num_{i}": x.item() for i, x in enumerate(loss_calvin_num_list)},
+                        # **{f"feat_sim_{i}": x.item() for i, x in enumerate(sim)},
+                        "extra_exit_loss_bin": extra_exit_loss_bin.item(),
+                        "extra_exit_loss_num": extra_exit_loss_num.item(),
+                        "mse": loss_mse.item(),
+                        "mle": loss_mle.item(),
+                        "mean_std": std.mean().item(),
+                        "global_step": global_step,
+                        "scale_factor": scaler.get_scale(),
+                    }
+                
+                if args.feat_distill_coef > 0:
+                    log_dict['loss_distill'] = loss_distill.mean().item()
+
+                wandb.log(
+                    log_dict,
+                    commit=True,
+                )
+
+
+        # Log loss to console
+        if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
+            print(
+                f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss: (all){loss_calvin.item():.3f} (mle) {loss_mle.item():.3f} (mse){loss_mse.item():.3f} (bce){loss_calvin_bin.mean().item():.3f} (std) {std.mean().item():.3f}"
+            )
+        avg_horizon = min(100, len(mv_avg_loss))
+        t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, "loss": loss_calvin.item(), "mle": loss_mle.item(), "mse": loss_mse.item(), "Lbin": loss_calvin_bin.mean().item(), "std": std.mean().item()})
+
+        if args.save_every_iter != -1 and global_step % args.save_every_iter == 0 and global_step > 0:
+            if args.rank == 0:
+                save_ckpt(args, model, llm_optimizer, llm_lr_scheduler, epoch, global_step)
 
 
 def train_one_epoch_calvin_cotrain(

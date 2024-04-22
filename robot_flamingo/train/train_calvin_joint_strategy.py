@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from train_utils import get_checkpoint, train_one_epoch_calvin, train_one_epoch_calvin_diff, train_one_epoch_calvin_cotrain, train_one_epoch_calvin_two_way, \
-train_one_epoch_calvin_multi_exit, get_ckpt_name, get_ckpt_name_pattern, save_ckpt
+train_one_epoch_calvin_multi_exit, train_one_epoch_calvin_multi_exit_joint_strategy, get_ckpt_name, get_ckpt_name_pattern, save_ckpt
 from torch.distributed.elastic.multiprocessing.errors import record
 from transformers import (
     get_constant_schedule_with_warmup,
@@ -59,7 +59,7 @@ def main():
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--exit_strategy", type=str, default='joint') # pre / joint / post
     parser.add_argument("--llm_update_freq", type=int, default=1) # pre / joint / post
-    parser.add_argument("--num_epochs", type=int, default=1)
+    parser.add_argument("--num_joint_epochs", type=int, default=1)
     parser.add_argument("--save_freq", type=int, default=1)
     parser.add_argument("--window_size", type=int, default=32)
     parser.add_argument(
@@ -94,7 +94,7 @@ def main():
         help="path to calvin_dataset",
     )
     parser.add_argument("--loss_multiplier_calvin", type=float, default=1.0)
-    parser.add_argument("--warmup_steps", default=5000, type=int)
+    parser.add_argument("--joint_warmup_steps", default=5000, type=int)
     parser.add_argument("--local-rank", default=0, type=int)
     parser.add_argument("--weight_decay", default=0.1, type=float)
     # hot fix for torch.distributed.launch
@@ -459,46 +459,64 @@ def main():
     model = model.to(device_id)
 
     ddp_model = DDP(model, device_ids=[device_id], find_unused_parameters=True)
+    
+    def is_head(name):
+        return 'lm_head' in name or 'lm_exit_modules' in name or 'extra_exit' in name
 
-    def get_grouped_params(model):
+    def apply_decay(x):
+        if not args.exit_decay:
+            apply_decay_bool = "gated_cross_attn_layer" in x
+        else:
+            apply_decay_bool = ("gated_cross_attn_layer" in x)
+        return (
+            apply_decay_bool
+            and "ff_gate" not in x
+            and "attn_gate" not in x
+            and "norm" not in x
+            and "bias" not in x
+        )
+
+    def get_llm_grouped_params(model):
         param_groups = {}
-
-        def apply_decay(x):
-            if not args.exit_decay:
-                apply_decay_bool = "gated_cross_attn_layer" in x
-            else:
-                apply_decay_bool = ("gated_cross_attn_layer" in x) or ('lm_head' in x) or ('lm_exit_modules' in x) or ('extra_exit' in x)
-            return (
-                apply_decay_bool
-                and "ff_gate" not in x
-                and "attn_gate" not in x
-                and "norm" not in x
-                and "bias" not in x
-            )
-
-        def apply_lr_scale(n, p):
-            if 'lm_head' in n or 'lm_exit_modules' in n or 'extra_exit' in n:
-                lr_scale = args.exit_lr_scale
-            else:
-                lr_scale = 1.0
-
-            if lr_scale not in param_groups:
-                param_groups[lr_scale] = []
-
-            param_groups[lr_scale].append((n, p))
-
-        # set lr_scale
-        for n, p in model.named_parameters():
-            apply_lr_scale(n, p)
         # set weight decay
         grouped_params = []
-        for lr_scale, params in param_groups.items():
-            params_with_wd, params_without_wd = [], []
-            for n, p in params:
-                if apply_decay(n):
-                    params_with_wd.append(p)
-                else:
-                    params_without_wd.append(p)
+
+        params_with_wd, params_without_wd = [], []
+        for n, p in model.named_parameters():
+            if is_head(n):
+                continue
+            if apply_decay(n):
+                params_with_wd.append(p)
+            else:
+                params_without_wd.append(p)
+        # Optimizer also support specifying per-parameter options. To do this, instead of passing an iterable of Variable s, pass in an iterable of dict s.
+        #! Each of them will define a separate parameter group, and should contain a params key, containing a list of parameters belonging to it. 
+        #! Other keys should match the keyword arguments accepted by the optimizers, and will be used as optimization options for this group.
+        # Adamw doesn't natively support per-parameter-group learning rate scaling through the "lr_scale" key in the parameter group dictionary.
+        # Unless update lr by lr_scale manually.
+        # grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": args.weight_decay})
+        # grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": 0.0})
+
+        lr = args.learning_rate  # Calculate the learning rate for this group
+        grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
+        grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
+
+        return grouped_params 
+    
+
+    def get_exit_grouped_params(model):
+        param_groups = {}    
+        # set weight decay
+        grouped_params = []
+        
+        params_with_wd, params_without_wd = [], []
+        for n, p in model.named_parameters():
+            if not is_head(n):
+                continue
+            if apply_decay(n):
+                params_with_wd.append(p)
+            else:
+                params_without_wd.append(p)
             # Optimizer also support specifying per-parameter options. To do this, instead of passing an iterable of Variable s, pass in an iterable of dict s.
             #! Each of them will define a separate parameter group, and should contain a params key, containing a list of parameters belonging to it. 
             #! Other keys should match the keyword arguments accepted by the optimizers, and will be used as optimization options for this group.
@@ -506,43 +524,58 @@ def main():
             # Unless update lr by lr_scale manually.
             # grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": args.weight_decay})
             # grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": 0.0})
-
-            lr = args.learning_rate * lr_scale  # Calculate the learning rate for this group
-            grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
-            grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
+            lr = args.learning_rate * args.exit_lr_scale  # Calculate the learning rate for this group
+        grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
+        grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
 
         return grouped_params 
 
         
     args.learning_rate = args.learning_rate * args.batch_size_calvin / 6 # adaptive lr
-    optimizer = torch.optim.AdamW(get_grouped_params(ddp_model), lr=args.learning_rate)
+    llm_optimizer = torch.optim.AdamW(get_llm_grouped_params(ddp_model), lr=args.learning_rate)
+    exit_optimizer = torch.optim.AdamW(get_exit_grouped_params(ddp_model), lr=args.learning_rate)
 
     # total_training_steps = (
     #     (args.train_num_samples_calvin) // (args.batch_size_calvin * args.world_size)
     # ) * args.num_epochs
-    total_training_steps = calvin_dataset.dataloader.num_batches * args.num_epochs
+    joint_training_steps = calvin_dataset.dataloader.num_batches * args.num_joint_epochs
 
     if args.rank == 0:
-        print(f"Total training steps: {total_training_steps}")
+        print(f"Joint training steps: {joint_training_steps}")
 
     if args.lr_scheduler == "linear":
-        lr_scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=args.warmup_steps,
-            num_training_steps=total_training_steps,
+        exit_lr_scheduler = get_linear_schedule_with_warmup(
+            exit_optimizer,
+            num_warmup_steps=args.joint_warmup_steps,
+            num_training_steps=joint_training_steps,
+        )
+        llm_lr_scheduler = get_linear_schedule_with_warmup(
+            llm_optimizer,
+            num_warmup_steps=int(args.joint_warmup_steps/args.llm_update_freq),
+            num_training_steps=int(joint_training_steps/args.llm_update_freq),
         )
     elif args.lr_scheduler == "cosine":
-        lr_scheduler = get_cosine_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=args.warmup_steps,
-            num_training_steps=total_training_steps,
+        exit_lr_scheduler = get_cosine_schedule_with_warmup(
+            exit_optimizer,
+            num_warmup_steps=args.joint_warmup_steps,
+            num_training_steps=joint_training_steps,
+        )
+        llm_lr_scheduler = get_cosine_schedule_with_warmup(
+            llm_optimizer,
+            num_warmup_steps=int(args.joint_warmup_steps/args.llm_update_freq),
+            num_training_steps=int(joint_training_steps/args.llm_update_freq),
         )
     elif args.lr_scheduler == 'cosine_restart':
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-7)
+        exit_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(exit_optimizer, T_0=10, T_mult=2, eta_min=1e-7)
+        llm_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(llm_optimizer, T_0=10, T_mult=2, eta_min=1e-7)
     else:
-        lr_scheduler = get_constant_schedule_with_warmup(
-            optimizer, num_warmup_steps=args.warmup_steps
+        exit_lr_scheduler = get_constant_schedule_with_warmup(
+            exit_optimizer, num_warmup_steps=args.joint_warmup_steps
         )
+        llm_lr_scheduler = get_constant_schedule_with_warmup(
+            llm_optimizer, num_warmup_steps=int(args.joint_warmup_steps/args.llm_update_freq),
+        )
+
 
     use_diff = (args.head_type == "diffusion")
     # check if a checkpoint exists for this run
@@ -581,8 +614,14 @@ def main():
             return new_state_dict
         ddp_model.load_state_dict(checkpoint["model_state_dict"], False)
         if not args.real_data:
-            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            lr_scheduler.load_state_dict(checkpoint["lr_scheduler_state_dict"])
+            llm_optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            llm_lr_scheduler.load_state_dict(checkpoint["lr_scheduler_state_dict"])
+            if "extra_optimizer_state_dict" in checkpoint and "extra_lr_scheduler_state_dict" in checkpoint:
+                exit_optimizer.load_state_dict(checkpoint["extra_optimizer_state_dict"])
+                exit_lr_scheduler.load_state_dict(checkpoint["extra_lr_scheduler_state_dict"])
+            else:
+                if args.rank == 0:
+                    print("Missing exit optimizer or exit lr scheduler!!!")
             resume_from_epoch = checkpoint["epoch"] + 1
     ddp_model.train()
     if args.real_data:
@@ -590,62 +629,31 @@ def main():
     
     print(f'{get_ckpt_name(args, 0)}')
     
+    args.num_epochs = args.num_joint_epochs
+    
     for epoch in range(resume_from_epoch, args.num_epochs):
         calvin_dataset.set_epoch(epoch)
         calvin_loader = calvin_dataset.dataloader
 
-        if args.head_type == "diffusion":
-            train_one_epoch_calvin_diff(
+        if args.multi_exit:
+            train_one_epoch_calvin_multi_exit_joint_strategy(
                 args=args,
                 model=ddp_model,
                 epoch=epoch,
                 tokenizer=tokenizer,
-                optimizer=optimizer,
-                lr_scheduler=lr_scheduler,
+                llm_optimizer=llm_optimizer,
+                exit_optimizer=exit_optimizer,
+                llm_lr_scheduler=llm_lr_scheduler,
+                exit_lr_scheduler=exit_lr_scheduler,
                 calvin_loader=calvin_loader,
                 device_id=device_id,
                 wandb=wandb,
             )
-        elif args.fusion_mode == 'two_way':
-            train_one_epoch_calvin_two_way(
-                args=args,
-                model=ddp_model,
-                epoch=epoch,
-                tokenizer=tokenizer,
-                optimizer=optimizer,
-                lr_scheduler=lr_scheduler,
-                calvin_loader=calvin_loader,
-                device_id=device_id,
-                wandb=wandb,
-            )
-        else:
-            if args.multi_exit:
-                train_one_epoch_calvin_multi_exit(
-                    args=args,
-                    model=ddp_model,
-                    epoch=epoch,
-                    tokenizer=tokenizer,
-                    optimizer=optimizer,
-                    lr_scheduler=lr_scheduler,
-                    calvin_loader=calvin_loader,
-                    device_id=device_id,
-                    wandb=wandb,
-                )
-            else:
-                train_one_epoch_calvin(
-                    args=args,
-                    model=ddp_model,
-                    epoch=epoch,
-                    tokenizer=tokenizer,
-                    optimizer=optimizer,
-                    lr_scheduler=lr_scheduler,
-                    calvin_loader=calvin_loader,
-                    device_id=device_id,
-                    wandb=wandb,
-                )
+
 
         if args.rank == 0 and epoch % args.save_freq == 0:
-            save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, epoch)
+            save_ckpt(args, ddp_model, llm_optimizer, llm_lr_scheduler, epoch, epoch,
+                      extra_optimizer=exit_optimizer, extra_lr_scheduler=exit_lr_scheduler)
 
     # if args.rank == 0:
     #     if not os.path.exists(args.run_name):

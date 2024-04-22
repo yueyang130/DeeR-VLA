@@ -57,9 +57,9 @@ def main():
     )
     parser.add_argument("--use_media_placement_augmentation", action="store_true")
     parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--exit_strategy", type=str, default='joint') # pre / joint / post
-    parser.add_argument("--llm_update_freq", type=int, default=1) # pre / joint / post
-    parser.add_argument("--num_epochs", type=int, default=1)
+    parser.add_argument("--exit_strategy", type=str, default='pre') # pre / joint / post
+    parser.add_argument("--num_joint_epochs", type=int, default=1)
+    parser.add_argument("--num_exit_epochs", type=int, default=1)
     parser.add_argument("--save_freq", type=int, default=1)
     parser.add_argument("--window_size", type=int, default=32)
     parser.add_argument(
@@ -81,7 +81,8 @@ def main():
         help="delete previous checkpoint when saving new checkpoint",
     )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--learning_rate", default=1e-4, type=float)  # 1e-4
+    parser.add_argument("--exit_learning_rate", default=1e-4, type=float)  # 1e-4
+    parser.add_argument("--joint_learning_rate", default=1e-4, type=float)  # 1e-4
     parser.add_argument(
         "--lr_scheduler",
         default="constant",
@@ -94,7 +95,8 @@ def main():
         help="path to calvin_dataset",
     )
     parser.add_argument("--loss_multiplier_calvin", type=float, default=1.0)
-    parser.add_argument("--warmup_steps", default=5000, type=int)
+    parser.add_argument("--exit_warmup_steps", default=5000, type=int)
+    parser.add_argument("--joint_warmup_steps", default=5000, type=int)
     parser.add_argument("--local-rank", default=0, type=int)
     parser.add_argument("--weight_decay", default=0.1, type=float)
     # hot fix for torch.distributed.launch
@@ -460,14 +462,16 @@ def main():
 
     ddp_model = DDP(model, device_ids=[device_id], find_unused_parameters=True)
 
-    def get_grouped_params(model):
+    def get_grouped_params(model, only_head=False):
         param_groups = {}
+        def is_head(name):
+            return 'lm_head' in n or 'lm_exit_modules' in n or 'extra_exit' in name
 
         def apply_decay(x):
             if not args.exit_decay:
                 apply_decay_bool = "gated_cross_attn_layer" in x
             else:
-                apply_decay_bool = ("gated_cross_attn_layer" in x) or ('lm_head' in x) or ('lm_exit_modules' in x) or ('extra_exit' in x)
+                apply_decay_bool = ("gated_cross_attn_layer" in x) or is_head(x)
             return (
                 apply_decay_bool
                 and "ff_gate" not in x
@@ -477,7 +481,7 @@ def main():
             )
 
         def apply_lr_scale(n, p):
-            if 'lm_head' in n or 'lm_exit_modules' in n or 'extra_exit' in n:
+            if not only_head and is_head(n):
                 lr_scale = args.exit_lr_scale
             else:
                 lr_scale = 1.0
@@ -489,7 +493,10 @@ def main():
 
         # set lr_scale
         for n, p in model.named_parameters():
+            if only_head and not is_head(n):
+                continue
             apply_lr_scale(n, p)
+            
         # set weight decay
         grouped_params = []
         for lr_scale, params in param_groups.items():
@@ -507,41 +514,62 @@ def main():
             # grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": args.weight_decay})
             # grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": 0.0})
 
-            lr = args.learning_rate * lr_scale  # Calculate the learning rate for this group
+            if only_head:
+                lr = args.exit_learning_rate * lr_scale  # Calculate the learning rate for this group
+            else:
+                lr = args.joint_learning_rate * lr_scale  # Calculate the learning rate for this group
             grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
             grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
 
         return grouped_params 
 
         
-    args.learning_rate = args.learning_rate * args.batch_size_calvin / 6 # adaptive lr
-    optimizer = torch.optim.AdamW(get_grouped_params(ddp_model), lr=args.learning_rate)
+    args.exit_learning_rate = args.exit_learning_rate * args.batch_size_calvin / 6 # adaptive lr
+    args.joint_learning_rate = args.joint_learning_rate * args.batch_size_calvin / 6 # adaptive lr
+    exit_optimizer = torch.optim.AdamW(get_grouped_params(ddp_model, only_head=True), lr=args.exit_learning_rate)
+    joint_optimizer = torch.optim.AdamW(get_grouped_params(ddp_model), lr=args.joint_learning_rate)
 
     # total_training_steps = (
     #     (args.train_num_samples_calvin) // (args.batch_size_calvin * args.world_size)
     # ) * args.num_epochs
-    total_training_steps = calvin_dataset.dataloader.num_batches * args.num_epochs
+    exit_training_steps = calvin_dataset.dataloader.num_batches * args.num_exit_epochs
+    joint_training_steps = calvin_dataset.dataloader.num_batches * args.num_joint_epochs
 
     if args.rank == 0:
-        print(f"Total training steps: {total_training_steps}")
+        print(f"Exit training steps: {exit_training_steps}")
+        print(f"Joint training steps: {joint_training_steps}")
 
     if args.lr_scheduler == "linear":
-        lr_scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=args.warmup_steps,
-            num_training_steps=total_training_steps,
+        exit_lr_scheduler = get_linear_schedule_with_warmup(
+            exit_optimizer,
+            num_warmup_steps=args.exit_warmup_steps,
+            num_training_steps=exit_training_steps,
+        )
+        joint_lr_scheduler = get_linear_schedule_with_warmup(
+            joint_optimizer,
+            num_warmup_steps=args.joint_warmup_steps,
+            num_training_steps=joint_training_steps,
         )
     elif args.lr_scheduler == "cosine":
-        lr_scheduler = get_cosine_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=args.warmup_steps,
-            num_training_steps=total_training_steps,
+        exit_lr_scheduler = get_cosine_schedule_with_warmup(
+            exit_optimizer,
+            num_warmup_steps=args.exit_warmup_steps,
+            num_training_steps=exit_training_steps,
+        )
+        joint_lr_scheduler = get_cosine_schedule_with_warmup(
+            joint_optimizer,
+            num_warmup_steps=args.joint_warmup_steps,
+            num_training_steps=joint_training_steps,
         )
     elif args.lr_scheduler == 'cosine_restart':
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-7)
+        exit_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(exit_optimizer, T_0=10, T_mult=2, eta_min=1e-7)
+        joint_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(joint_optimizer, T_0=10, T_mult=2, eta_min=1e-7)
     else:
-        lr_scheduler = get_constant_schedule_with_warmup(
-            optimizer, num_warmup_steps=args.warmup_steps
+        exit_lr_scheduler = get_constant_schedule_with_warmup(
+            exit_optimizer, num_warmup_steps=args.exit_warmup_steps
+        )
+        joint_lr_scheduler = get_constant_schedule_with_warmup(
+            joint_optimizer, num_warmup_steps=args.joint_warmup_steps
         )
 
     use_diff = (args.head_type == "diffusion")
@@ -590,9 +618,29 @@ def main():
     
     print(f'{get_ckpt_name(args, 0)}')
     
+    args.num_epochs = args.num_exit_epochs + args.num_joint_epochs
+    
     for epoch in range(resume_from_epoch, args.num_epochs):
         calvin_dataset.set_epoch(epoch)
         calvin_loader = calvin_dataset.dataloader
+        
+        if epoch < args.num_exit_epochs:
+            ddp_model.module.vision_encoder.eval()
+            ddp_model.module.perceiver.eval()
+            ddp_model.module.lang_encoder.eval()
+            optimizer = exit_optimizer
+            lr_scheduler = exit_lr_scheduler
+            only_train_head = True
+        else:
+            if epoch == args.num_exit_epochs:
+                del exit_optimizer
+                del exit_lr_scheduler
+            ddp_model.module.vision_encoder.train()
+            ddp_model.module.perceiver.train()
+            ddp_model.module.lang_encoder.train()  
+            optimizer = joint_optimizer
+            lr_scheduler = joint_lr_scheduler    
+            only_train_head = False
 
         if args.head_type == "diffusion":
             train_one_epoch_calvin_diff(
@@ -630,6 +678,7 @@ def main():
                     calvin_loader=calvin_loader,
                     device_id=device_id,
                     wandb=wandb,
+                    only_train_head=only_train_head,
                 )
             else:
                 train_one_epoch_calvin(

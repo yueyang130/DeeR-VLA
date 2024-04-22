@@ -755,7 +755,7 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
                 print("\nEvaluate the extra exit with features from a fixed layer (i=0,1,2,..) !\n")
             else:
                 print("\nEvaluate all exits by numerical order!\n")
-        for exit_id in model.module.get_all_exit_idx():
+        for exit_id in reversed(model.module.get_all_exit_idx()):
             if args.rank == 0: print('#'*40 + '\n' + f'Evaluate the exit with exit_id={exit_id}!\n' + '#'*40 + '\n')
             wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id, multi_execution=args.multi_execution)
             evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)

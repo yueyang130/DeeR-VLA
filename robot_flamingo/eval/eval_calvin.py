@@ -14,7 +14,6 @@ os.environ['PYOPENGL_PLATFORM'] = 'egl'
 import numpy as np
 import torch
 import wandb
-from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from robot_flamingo.data.data import get_data

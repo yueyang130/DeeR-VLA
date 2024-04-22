@@ -37,15 +37,41 @@ ckpt_names = [
     # 'proj2_distill1e-3amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.001_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
     # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.001_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
     # 'amp_checkpoint_gripper_post_hist_1__exit_layer_11_multi-exit_uniform_interval=2_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
-    'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_cosine_4.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_5_multi-exit_uniform_interval=1_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_data_0.5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_cosine_4.pth',
+    # 'amp_checkpoint_gripper_post_hist_1__exit_layer_11_multi-exit_uniform_interval=2_distill=0.0_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_5.pth',
+    # 'strategy=post_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'strategy=post_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    # 'strategy=post_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_5.pth',
+    # 'strategy=post_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_6.pth',
+    # 'reumse_post_4+3_strategy=post_4+6_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'reumse_post_4+3_strategy=post_4+6_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'reumse_post_4+3_strategy=post_4+6_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_9.pth',
+    # 'reumse_post_4+0-_strategy=post_5+6_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'reumse_post_4+0-_strategy=post_5+6_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'reumse_post_3+0-_strategy=post_3+6_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_5.pth',
+    # 'reumse_post_3+0-_strategy=post_3+6_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_6.pth',
+    # 'strategy=pre_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
+    # 'strategy=pre_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_5.pth',
+    # 'strategy=pre_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_6.pth',
+    # 'strategy=joint_frq=2_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'strategy=joint_frq=3_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'strategy=joint_frq=3_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    # 'strategy=joint_frq=3_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_5.pth',
+    # 'strategy=joint_frq=3_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_6.pth',
+    # 'strategy=joint_frq=3_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    'strategy=joint_frq=3_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    'strategy=joint_frq=3_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_9.pth',
+    'strategy=joint_frq=3_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_lr_scale=0.25_dropout=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_10.pth',
     
 ]
 
 print(ckpt_names)
 for ckpt_name in ckpt_names:
     for r in args.exit_ratio:
-        use_gripper = 1 if 'gripper' in ckpt_name else 0
-        use_state = 1 if 'state' in ckpt_name else 0
+        # use_gripper = 1 if 'gripper' in ckpt_name else 0
+        # use_state = 1 if 'state' in ckpt_name else 0
+        use_gripper = 1
+        use_state = 0
         ckpt_path = os.path.join(args.ckpt_dir, ckpt_name)
         # value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_4.pth')
         value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_discrete_b20_4.pth')
@@ -59,7 +85,8 @@ for ckpt_name in ckpt_names:
             print(f'eval exit ratio = {r}')
             prefix += f'_{r}'
         prefix += '_exit'
-        prefix += f'_{args.multi_execution}_execution'
+        if args.multi_execution > 1:
+            prefix += f'_{args.multi_execution}_execution'
             
         if args.eval_exit_mode != 'dynamic':
             log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
@@ -70,11 +97,12 @@ for ckpt_name in ckpt_names:
             continue
         ckpt_ix = ckpt_names.index(ckpt_name)
         print('evaluating {}/{} checkpoint'.format(ckpt_ix+1, len(ckpt_names)))
-        fusion_mode = 'pre'
-        if 'post' in ckpt_name:
-            fusion_mode = 'post'
-        if 'two_way' in ckpt_name:
-            fusion_mode = 'two_way'
+        # fusion_mode = 'pre'
+        # if 'post' in ckpt_name:
+        #     fusion_mode = 'post'
+        # if 'two_way' in ckpt_name:
+        #     fusion_mode = 'two_way'
+        fusion_mode = 'post'
         window_size = 8
         ckpt_attrs = ckpt_name.split('_')
         if 'ws' in ckpt_attrs:

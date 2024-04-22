@@ -10,6 +10,7 @@ import time
 import shutil
 from fvcore.nn import FlopCountAnalysis
 from thop import profile
+from contextlib import suppress
 
 class MPTFlamingo(nn.Module):
     def __init__(
@@ -310,6 +311,7 @@ class MPTFlamingo(nn.Module):
         return_aggregate_feature=False,
         only_extra_exit=False,
         eval_time=False,
+        no_backbone_grad=False,
     ):
         """
         Forward pass of Flamingo.
@@ -366,26 +368,29 @@ class MPTFlamingo(nn.Module):
         if eval_time:
             torch.cuda.synchronize()
             cur_time = time.time()
-    
-        if dynamic_early_exit and exit_controller is not None:
-            output = self.lang_encoder(
-                input_ids=lang_x,
-                attention_mask=attention_mask.bool(),
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                output_hidden_states=True,
-                exit_controller = exit_controller,
-            )
-        else:
-            # when exit_id is None, it behaves as the static LLM forward            
-            output = self.lang_encoder(
-                input_ids=lang_x,
-                attention_mask=attention_mask.bool(),
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                output_hidden_states=True,
-                exit_id=exit_id,
-            )
+            
+        grad_manager = torch.no_grad if no_backbone_grad else suppress
+
+        with grad_manager():
+            if dynamic_early_exit and exit_controller is not None:
+                output = self.lang_encoder(
+                    input_ids=lang_x,
+                    attention_mask=attention_mask.bool(),
+                    past_key_values=past_key_values,
+                    use_cache=use_cache,
+                    output_hidden_states=True,
+                    exit_controller = exit_controller,
+                )
+            else:
+                # when exit_id is None, it behaves as the static LLM forward            
+                output = self.lang_encoder(
+                    input_ids=lang_x,
+                    attention_mask=attention_mask.bool(),
+                    past_key_values=past_key_values,
+                    use_cache=use_cache,
+                    output_hidden_states=True,
+                    exit_id=exit_id,
+                )
 
         if eval_time:
             torch.cuda.synchronize()
