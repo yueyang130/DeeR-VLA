@@ -10,22 +10,88 @@ from robot_flamingo.models.trajectory_gpt2 import get_gpt_model
 # from .unets import *
 import copy
 
+
+
+class LayerNormLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, dropout, batch_first):
+        super(LayerNormLSTM, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.batch_first = batch_first
+        
+        # Create layers of LSTM followed by LayerNorm
+        self.layers = nn.ModuleList()
+        for i in range(num_layers):
+            is_last_layer = i == num_layers - 1
+            dropout_value = 0 if is_last_layer else dropout
+            self.layers.append(nn.LSTM(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                num_layers=1,
+                bidirectional=False,
+                batch_first=batch_first,
+                dropout=dropout_value,
+            ))
+            self.layers.append(nn.LayerNorm(hidden_size))
+            input_size = hidden_size  # Next layer's input is current layer's output
+
+    def forward(self, x, hidden=None):
+        # Split hidden state into h and c for each layer, if provided
+        if hidden:
+            hidden_states = [(hidden[0][i:i+1], hidden[1][i:i+1]) for i in range(self.num_layers)]
+        else:
+            hidden_states = [None] * self.num_layers
+        
+        # Process each LSTM layer followed by LayerNorm
+        for i in range(0, len(self.layers), 2):
+            lstm = self.layers[i]
+            layer_norm = self.layers[i + 1]
+            x, new_hidden_state = lstm(x, hidden_states[i // 2])
+            x = layer_norm(x)
+            hidden_states[i // 2] = new_hidden_state
+        
+        # Prepare the final hidden state tuple for return
+        final_hidden = (torch.cat([h[0] for h in hidden_states], dim=0),
+                        torch.cat([h[1] for h in hidden_states], dim=0))
+        return x, final_hidden
+
 def lstm_decoder(
-    in_features: int, hidden_size: int, num_layers: int, policy_rnn_dropout_p: float
+    in_features: int, hidden_size: int, num_layers: int, policy_rnn_dropout_p: float, layernorm: bool = False
 ) -> torch.nn.Module:
-    return nn.LSTM(
-        input_size=in_features,
-        hidden_size=hidden_size,
-        num_layers=num_layers,
-        bidirectional=False,
-        batch_first=True,
-        dropout=policy_rnn_dropout_p,
-    )
+    if layernorm:
+        return LayerNormLSTM(in_features, hidden_size, num_layers, policy_rnn_dropout_p, batch_first=True)
+    else:
+        return nn.LSTM(
+            input_size=in_features,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            bidirectional=False,
+            batch_first=True,
+            dropout=policy_rnn_dropout_p,
+        )
+
 
 class MLPTanhHead(torch.nn.Module):
-    def __init__(self, hidden_size, output_size, dropout):
+    def __init__(self, hidden_size, output_size, dropout, layernorm=False):
         super().__init__()
-        if dropout > 0:
+        if layernorm:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(hidden_size, 1024),
+                nn.LayerNorm(1024) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(1024, 512),
+                nn.LayerNorm(512) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(512, 256),
+                nn.LayerNorm(256) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size),
+                torch.nn.Tanh(),
+            )            
+        elif dropout > 0:
             self.mlp = torch.nn.Sequential(
                 torch.nn.Dropout(dropout), 
                 torch.nn.Linear(hidden_size, 1024),
@@ -55,23 +121,48 @@ class MLPTanhHead(torch.nn.Module):
         return self.mlp(x)
     
 class MLPNohHeadLight(torch.nn.Module):
-    def __init__(self, hidden_size, output_size, dropout):
+    def __init__(self, hidden_size, output_size, dropout, layernorm=False):
         super().__init__()
-        self.mlp = torch.nn.Sequential(
-            torch.nn.Dropout(dropout), 
-            torch.nn.Linear(hidden_size, 256),
-            torch.nn.ReLU(),
-            torch.nn.Linear(256, output_size)
-        )
+        if layernorm:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(hidden_size, 256),
+                nn.LayerNorm(256) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size)
+            )
+        else:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(hidden_size, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size)
+            )
     
     def forward(self, x):
         return self.mlp(x)
 
 
 class MLPNohHead(torch.nn.Module):
-    def __init__(self, hidden_size, output_size, dropout):
+    def __init__(self, hidden_size, output_size, dropout, layernorm):
         super().__init__()
-        if dropout > 0:
+        if layernorm:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(hidden_size, 1024),
+                nn.LayerNorm(1024) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(1024, 512),
+                nn.LayerNorm(512) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(512, 256),
+                nn.LayerNorm(256) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size)
+            )            
+        elif dropout > 0:
             self.mlp = torch.nn.Sequential(
                 torch.nn.Dropout(dropout), 
                 torch.nn.Linear(hidden_size, 1024),
@@ -99,9 +190,26 @@ class MLPNohHead(torch.nn.Module):
         return self.mlp(x)
 
 class MLPSigmoidHead(torch.nn.Module):
-    def __init__(self, hidden_size, output_size, dropout):
+    def __init__(self, hidden_size, output_size, dropout, layernorm):
         super().__init__()
-        if dropout > 0:
+        if layernorm:
+            self.mlp = torch.nn.Sequential(
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(hidden_size, 1024),
+                nn.LayerNorm(1024) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(1024, 512),
+                nn.LayerNorm(512) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout), 
+                torch.nn.Linear(512, 256),
+                nn.LayerNorm(256) if layernorm else nn.Identity(),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, output_size),
+                torch.nn.Sigmoid(),
+            )
+        elif dropout > 0:
             self.mlp = torch.nn.Sequential(
                 torch.nn.Dropout(dropout), 
                 torch.nn.Linear(hidden_size, 1024),
@@ -136,7 +244,7 @@ class MLPSigmoidHead(torch.nn.Module):
             return self.mlp[-1](x)
 
 class MLPActionHead(torch.nn.Module):
-    def __init__(self, hidden_size, dropout):
+    def __init__(self, hidden_size, dropout, layernorm):
         super().__init__()
         self.hidden_size = hidden_size
         # Create a linear layer for each action
@@ -315,6 +423,8 @@ class DeterministicDecoder(ActionDecoder):
         in_features: int,
         window_size: int,
         dropout: float,
+        mlp_layernorm: bool,
+        lstm_layernorm: bool,
         history_len = None,
         out_features: int = 6,
         hidden_size: int = 1024,
@@ -359,11 +469,13 @@ class DeterministicDecoder(ActionDecoder):
         
         # self.projection = [nn.Sequential(
         #     nn.Linear(in_features, hidden_size),
+        #     nn.LayerNorm(hidden_size) if layernorm else nn.Identity(),
         #     nn.ReLU(inplace=True)
         # )]
         # self.projection.extend([
         #     nn.Sequential(
         #         nn.Linear(hidden_size, hidden_size),
+        #         nn.LayerNorm(hidden_size) if layernorm else nn.Identity(),
         #         nn.ReLU(inplace=True)
         #     )
         #     for _ in range(num_projection_layers - 1)
@@ -372,13 +484,13 @@ class DeterministicDecoder(ActionDecoder):
         
         
         self.rnn = lstm_decoder
-        self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p)
+        self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p, lstm_layernorm)
         # self.rnn = self.rnn(hidden_size, hidden_size, num_layers, policy_rnn_dropout_p)
         self.use_diff = use_diff
         self.fusion_mode = fusion_mode
         if not use_diff:
-            self.actions = MLPTanhHead(hidden_size, out_features*multi_step_action, dropout)
-            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action, dropout)
+            self.actions = MLPTanhHead(hidden_size, out_features*multi_step_action, dropout, mlp_layernorm)
+            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action, dropout, mlp_layernorm)
         self.hidden_state = None
         self.hidden_size = hidden_size
         self.rnn_out = None
@@ -453,7 +565,8 @@ class DeterministicDecoder(ActionDecoder):
             # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
             input_feature = input_feature + state_embeddings
         
-        if not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase):
+        if (not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase)) \
+            or isinstance(self.rnn, LayerNormLSTM):
             # print('history len:',self.history_len)
             if input_feature.shape[1] == 1:  # the first frame of an action sequence
                 self.history_memory.append(input_feature)

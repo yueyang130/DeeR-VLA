@@ -331,6 +331,7 @@ def main():
     parser.add_argument("--exit_weight", type=str, default='uniform', help='uniform/ascending/descending')
     parser.add_argument("--exit_lr_scale", type=float, default=1.0, help='scale learning rate for exits')
     parser.add_argument("--exit_dropout", type=float, default=0.0, help='')
+    parser.add_argument("--layernorm", default=False, action="store_true")
     parser.add_argument("--exit_decay", action="store_true", default=False)
     parser.add_argument("--use_extra_exit", action="store_true", default=False)
     parser.add_argument("--feat_distill_coef", type=float, default=0.0, help='use feature distillation if coef is greater than 0')
@@ -413,6 +414,7 @@ def main():
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
+        layernorm=args.layernorm,
         use_extra_exit=args.use_extra_exit,
     )
 

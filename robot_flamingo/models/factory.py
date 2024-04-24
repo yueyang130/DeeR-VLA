@@ -7,6 +7,7 @@ from robot_flamingo.models.flamingo_mpt import MPTFlamingo
 from open_flamingo.src.flamingo_lm import FlamingoLMMixin
 from open_flamingo.src.utils import extend_instance
 from open_flamingo.src.factory import _infer_decoder_layers_attr_name
+import torch
 
 clip_path = "/mnt/bn/yueyang/archive/clip"
 mpt_dict = {
@@ -283,21 +284,24 @@ def create_model_and_transforms(
     # # Unfreeze the action head 
     # model.action_head.requires_grad_(True)
 
-    print(
-        f"Vision Enocder with {sum(p.numel() for p in vision_encoder.parameters())/1e6:.2f}M parameters"
-    )
-    print(
-        f"Vision Perciver with {sum(p.numel() for p in model.perceiver.parameters())/1e6:.2f}M parameters"
-    )
-    print(
-        f"{model.early_exit_layer+1}-layer LLM with {sum(p.numel() for p in model.lang_encoder.parameters())/1e6:.2f}M parameters"
-    )
-    print(
-        f"One Action head with {sum(p.numel() for p in model.lm_head.parameters())/1e6:.2f}M parameters"
-    )
+    if torch.distributed.get_rank() == 0:
+        print(
+            f"Vision Enocder with {sum(p.numel() for p in vision_encoder.parameters())/1e6:.2f}M parameters"
+        )
+        print(
+            f"Vision Perciver with {sum(p.numel() for p in model.perceiver.parameters())/1e6:.2f}M parameters"
+        )
+        print(
+            f"{model.early_exit_layer+1}-layer LLM with {sum(p.numel() for p in model.lang_encoder.parameters())/1e6:.2f}M parameters"
+        )
+        print(
+            f"One Action head with {sum(p.numel() for p in model.lm_head.parameters())/1e6:.2f}M parameters"
+        )
 
-    print(
-        f"Flamingo model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)/1e6:.2f}M trainable parameters"
-    )
+        print(
+            f"Flamingo model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)/1e6:.2f}M trainable parameters"
+        )
+        print(model.extra_exit)
+    
 
     return model, image_processor, text_tokenizer

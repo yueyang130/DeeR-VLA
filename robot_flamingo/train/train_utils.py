@@ -46,6 +46,8 @@ def save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, step, extra_optim
         "exit_interval": args.exit_interval,
         "exit_weight": args.exit_weight,
         "exit_dropout": args.exit_dropout,
+        "mlp_layernorm": args.mlp_layernorm,
+        "lstm_layernorm": args.lstm_layernorm,
         "precision": args.precision,
         "model_state_dict": get_checkpoint(ddp_model),
         "optimizer_state_dict": optimizer.state_dict(),
@@ -129,10 +131,14 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'distill={}_'.format(args.feat_distill_coef)
     if args.use_extra_exit:
         ckpt_name += 'extra-exit_'
+    if args.mlp_layernorm:
+        ckpt_name += 'mlpln_'
+    if args.lstm_layernorm:
+        ckpt_name += 'lstmln_'
     if args.exit_lr_scale != 1.0:
         ckpt_name += 'lr_scale={}_'.format(args.exit_lr_scale)
     if args.exit_dropout != 0:
-        ckpt_name += 'dropout={}_'.format(args.exit_dropout)
+        ckpt_name += 'dropout={}_'.format(args.exit_dropout)    
     if args.exit_decay:
         ckpt_name += 'decay_'
     if args.data_percent < 1.0:

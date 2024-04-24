@@ -447,6 +447,10 @@ def main():
     readout_args(args, checkpoint, "use_extra_exit", False)
     readout_args(args, checkpoint, "exit_interval", 1)
     readout_args(args, checkpoint, "exit_dropout", 0.0)
+    readout_args(args, checkpoint, "mlp_layernorm", False)
+    readout_args(args, checkpoint, "lstm_layernorm", False)
+    if 'layernorm' in checkpoint: # for compatibility with old code
+        args.mlp_layernorm = checkpoint['layernorm']
     
     model, image_processor, tokenizer = create_model_and_transforms(
         args.vision_encoder_path,
@@ -492,6 +496,8 @@ def main():
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
+        mlp_layernorm=args.mlp_layernorm,
+        lstm_layernorm=args.lstm_layernorm,
         use_extra_exit=args.use_extra_exit,
     )
     checkpoint_path = args.openflamingo_checkpoint
