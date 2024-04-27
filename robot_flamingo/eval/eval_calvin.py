@@ -447,8 +447,13 @@ def main():
     readout_args(args, checkpoint, "use_extra_exit", False)
     readout_args(args, checkpoint, "exit_interval", 1)
     readout_args(args, checkpoint, "exit_dropout", 0.0)
+    readout_args(args, checkpoint, "lstm_dropout", 0.0)
+    readout_args(args, checkpoint, "dropout_mode", "wo_last")
     readout_args(args, checkpoint, "mlp_layernorm", False)
     readout_args(args, checkpoint, "lstm_layernorm", False)
+    readout_args(args, checkpoint, "mlp_num_hidden_layers", 3)
+    readout_args(args, checkpoint, "lstm_num_layers", 4)
+    readout_args(args, checkpoint, "pooling", 'max')
     if 'layernorm' in checkpoint: # for compatibility with old code
         args.mlp_layernorm = checkpoint['layernorm']
     
@@ -496,8 +501,11 @@ def main():
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
+        lstm_dropout=args.lstm_dropout,
+        dropout_mode=args.dropout_mode,
         mlp_layernorm=args.mlp_layernorm,
         lstm_layernorm=args.lstm_layernorm,
+        mlp_num_hidden_layers=args.mlp_num_hidden_layers,
         use_extra_exit=args.use_extra_exit,
     )
     checkpoint_path = args.openflamingo_checkpoint

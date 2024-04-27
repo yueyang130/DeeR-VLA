@@ -327,14 +327,21 @@ def main():
         help="Floating point precision.",
     )
     # for dynamic network
+    # backbone
+    parser.add_argument("--layer_decay", type=float, default=1.0, help='layerwise lr decay for flamingo layers')
+    # exit
     parser.add_argument("--early_exit_layer", type=int, default=-1, help='remove all layers after it') 
     parser.add_argument("--multi_exit", action="store_true", default=False)
     parser.add_argument("--exit_interval", type=int, default=1, help='intervals between exits')
     parser.add_argument("--exit_weight", type=str, default='uniform', help='uniform/ascending/descending')
     parser.add_argument("--exit_lr_scale", type=float, default=1.0, help='scale learning rate for exits')
     parser.add_argument("--exit_dropout", type=float, default=0.0, help='')
+    parser.add_argument("--lstm_dropout", type=float, default=0.1, help='')
+    parser.add_argument("--dropout_mode", default='wo_last', choices=['layerwise', 'last', 'wo_last'])
     parser.add_argument("--mlp_layernorm", default=False, action="store_true")
     parser.add_argument("--lstm_layernorm", default=False, action="store_true")
+    parser.add_argument("--mlp_num_hidden_layers", type=int, default=3)
+    parser.add_argument("--lstm_num_layers", type=int, default=4)
     parser.add_argument("--exit_decay", action="store_true", default=False)
     parser.add_argument("--use_extra_exit", action="store_true", default=False)
     parser.add_argument("--feat_distill_coef", type=float, default=0.0, help='use feature distillation if coef is greater than 0')
@@ -417,10 +424,17 @@ def main():
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
+        lstm_dropout=args.lstm_dropout,
+        dropout_mode=args.dropout_mode,
         mlp_layernorm=args.mlp_layernorm,
         lstm_layernorm=args.lstm_layernorm,
+        mlp_num_hidden_layers=args.mlp_num_hidden_layers,
+        lstm_num_layers=args.lstm_num_layers,
         use_extra_exit=args.use_extra_exit,
     )
+    
+    if args.early_exit_layer < 0:
+        args.early_exit_layer += model.lang_encoder.config.n_layers
 
     checkpoint_path = args.openflamingo_checkpoint
     if not args.debug and not args.no_pretrain:

@@ -72,9 +72,74 @@ def lstm_decoder(
 
 
 class MLPTanhHead(torch.nn.Module):
-    def __init__(self, hidden_size, output_size, dropout, layernorm=False):
+    def __init__(self, hidden_size, output_size, dropout, layernorm=False, dropout_mode='layerwise', num_hidden_layers=3):
         super().__init__()
-        if layernorm:
+        
+        if dropout_mode in ['last', 'layerwise']:
+            hidden_dims=[1024, 512, 256]
+            assert len(hidden_dims) >= num_hidden_layers
+            hidden_dims = hidden_dims[:num_hidden_layers]
+            
+            layers = []
+            current_size = hidden_size
+            
+            if dropout_mode == 'layerwise':
+                layers.append(nn.Dropout(dropout))
+            
+            for i, dim in enumerate(hidden_dims):
+                layers.append(nn.Linear(current_size, dim))
+                if layernorm:
+                    layers.append(nn.LayerNorm(dim))
+                else:
+                    layers.append(nn.Identity())
+                layers.append(nn.ReLU())
+
+                # Apply dropout according to the specified mode
+                if dropout_mode == 'layerwise' or (dropout_mode == 'last' and i == num_hidden_layers - 1):
+                    layers.append(nn.Dropout(dropout))
+                
+                current_size = dim
+
+            # Output layer
+            layers.append(nn.Linear(hidden_dims[-1], output_size))
+            layers.append(torch.nn.Tanh())
+
+            # Register the sequential model
+            self.mlp = nn.Sequential(*layers)
+        # if dropout_mode == 'last':
+        #     self.mlp = torch.nn.Sequential(
+        #         torch.nn.Linear(hidden_size, 1024),
+        #         nn.LayerNorm(1024) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Linear(1024, 512),
+        #         nn.LayerNorm(512) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Linear(512, 256),
+        #         nn.LayerNorm(256) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(256, output_size),
+        #         torch.nn.Tanh(),
+        #     )
+        # elif dropout_mode == 'layerwise':
+        #     self.mlp = torch.nn.Sequential(
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(hidden_size, 1024),
+        #         nn.LayerNorm(1024) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(1024, 512),
+        #         nn.LayerNorm(512) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(512, 256),
+        #         nn.LayerNorm(256) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(256, output_size),
+        #         torch.nn.Tanh(),
+        #     ) 
+        elif layernorm:
             self.mlp = torch.nn.Sequential(
                 torch.nn.Dropout(dropout), 
                 torch.nn.Linear(hidden_size, 1024),
@@ -190,9 +255,77 @@ class MLPNohHead(torch.nn.Module):
         return self.mlp(x)
 
 class MLPSigmoidHead(torch.nn.Module):
-    def __init__(self, hidden_size, output_size, dropout, layernorm):
+    def __init__(self, hidden_size, output_size, dropout, layernorm, dropout_mode='layerwise', num_hidden_layers=3):
         super().__init__()
-        if layernorm:
+        
+        if dropout_mode in ['last', 'layerwise']:
+            hidden_dims=[1024, 512, 256]
+            assert len(hidden_dims) >= num_hidden_layers
+            hidden_dims = hidden_dims[:num_hidden_layers]
+            
+            layers = []
+            current_size = hidden_size
+            
+            if dropout_mode == 'layerwise':
+                layers.append(nn.Dropout(dropout))
+            
+            for i, dim in enumerate(hidden_dims):
+                layers.append(nn.Linear(current_size, dim))
+                if layernorm:
+                    layers.append(nn.LayerNorm(dim))
+                else:
+                    layers.append(nn.Identity())
+                layers.append(nn.ReLU())
+
+                # Apply dropout according to the specified mode
+                if dropout_mode == 'layerwise' or (dropout_mode == 'last' and i == num_hidden_layers - 1):
+                    layers.append(nn.Dropout(dropout))
+                
+                current_size = dim
+
+            # Output layer
+            layers.append(nn.Linear(hidden_dims[-1], output_size))
+            layers.append(nn.Sigmoid())
+
+            # Register the sequential model
+            self.mlp = nn.Sequential(*layers)
+
+        # if dropout_mode == 'last':
+        #     self.mlp = torch.nn.Sequential(
+        #         torch.nn.Linear(hidden_size, 1024),
+        #         nn.LayerNorm(1024) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Linear(1024, 512),
+        #         nn.LayerNorm(512) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Linear(512, 256),
+        #         nn.LayerNorm(256) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(256, output_size),
+        #         torch.nn.Sigmoid(),
+        #     )
+        # elif dropout_mode == 'layerwise':
+        #     if num_hidden_layers != 3: raise NotImplementedError
+        #     self.mlp = torch.nn.Sequential(
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(hidden_size, 1024),
+        #         nn.LayerNorm(1024) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(1024, 512),
+        #         nn.LayerNorm(512) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(512, 256),
+        #         nn.LayerNorm(256) if layernorm else nn.Identity(),
+        #         torch.nn.ReLU(),
+        #         torch.nn.Dropout(dropout), 
+        #         torch.nn.Linear(256, output_size),
+        #         torch.nn.Sigmoid(),
+        #     )
+        elif layernorm:
+            if num_hidden_layers != 3: raise NotImplementedError
             self.mlp = torch.nn.Sequential(
                 torch.nn.Dropout(dropout), 
                 torch.nn.Linear(hidden_size, 1024),
@@ -423,14 +556,16 @@ class DeterministicDecoder(ActionDecoder):
         in_features: int,
         window_size: int,
         dropout: float,
+        policy_rnn_dropout_p: float,
+        dropout_mode: str,
         mlp_layernorm: bool,
         lstm_layernorm: bool,
+        mlp_num_hidden_layers: int,
         history_len = None,
         out_features: int = 6,
         hidden_size: int = 1024,
         num_projection_layers : int = 2,
-        num_layers: int = 4, # move two layers to projection
-        policy_rnn_dropout_p: float = 0.1,
+        lstm_num_layers: int = 4, # move two layers to projection
         use_diff=False,
         last_action=False,
         fusion_mode='',
@@ -484,13 +619,13 @@ class DeterministicDecoder(ActionDecoder):
         
         
         self.rnn = lstm_decoder
-        self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p, lstm_layernorm)
+        self.rnn = self.rnn(in_features, hidden_size, lstm_num_layers, policy_rnn_dropout_p, lstm_layernorm)
         # self.rnn = self.rnn(hidden_size, hidden_size, num_layers, policy_rnn_dropout_p)
         self.use_diff = use_diff
         self.fusion_mode = fusion_mode
         if not use_diff:
-            self.actions = MLPTanhHead(hidden_size, out_features*multi_step_action, dropout, mlp_layernorm)
-            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action, dropout, mlp_layernorm)
+            self.actions = MLPTanhHead(hidden_size, out_features*multi_step_action, dropout, mlp_layernorm, dropout_mode, mlp_num_hidden_layers)
+            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action, dropout, mlp_layernorm, dropout_mode, mlp_num_hidden_layers)
         self.hidden_state = None
         self.hidden_size = hidden_size
         self.rnn_out = None
