@@ -476,8 +476,8 @@ class MPTFlamingo(nn.Module):
             # (bs, action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, lang_len, d)
             bs, action_seq_len, _ = all_feats.shape[:3]
             # rand_layer_indices = torch.randint(0, n_exit, size=(bs, action_seq_len, 1, 1, 1), device=all_feats.device)
-            exit_ids = list(self.lm_exits.keys())
-            indices = torch.randint(0, len(exit_ids), size=(bs, action_seq_len), device=all_feats.device)
+            exit_ids = self.get_all_exit_idx()
+            indices = torch.randint(0, self.get_exit_num(), size=(bs, action_seq_len), device=all_feats.device)
             rand_layer_indices = torch.tensor([exit_ids[idx] for idx in indices.reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len, 1, 1, 1)
             
             rand_layer_indices = rand_layer_indices.expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
