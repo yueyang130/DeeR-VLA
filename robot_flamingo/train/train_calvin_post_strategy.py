@@ -350,6 +350,7 @@ def main():
     parser.add_argument("--lstm_num_layers", type=int, default=4)
     parser.add_argument("--exit_decay", action="store_true", default=False)
     parser.add_argument("--use_extra_exit", action="store_true", default=False)
+    parser.add_argument("--detach_extra_exit", type=int, default=1)
     parser.add_argument("--feat_distill_coef", type=float, default=0.0, help='use feature distillation if coef is greater than 0')
     # for value net
     # parser.add_argument("--with_value_net", action="store_true", default=False, help='jointly train value net')
@@ -437,6 +438,7 @@ def main():
         mlp_num_hidden_layers=args.mlp_num_hidden_layers,
         lstm_num_layers=args.lstm_num_layers,
         use_extra_exit=args.use_extra_exit,
+        detach_extra_exit=args.detach_extra_exit,
     )
     
     if args.early_exit_layer < 0:

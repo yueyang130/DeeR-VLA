@@ -139,6 +139,8 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'distill={}_'.format(args.feat_distill_coef)
     if args.use_extra_exit:
         ckpt_name += 'extra-exit_'
+        if not args.detach_extra_exit:
+            ckpt_name += 'nodetach_'
     if args.mlp_num_hidden_layers != 3:
         ckpt_name += 'mlp{}L_'.format(args.mlp_num_hidden_layers)
     if args.mlp_layernorm:

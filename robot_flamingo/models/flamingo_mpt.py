@@ -63,6 +63,7 @@ class MPTFlamingo(nn.Module):
         dropout_mode='layerwise',
         # for dynamic exit
         use_extra_exit=False,
+        detach_extra_exit=True,
         layerwise_exit_eval=False,
         mlp_layernorm=False,
         lstm_layernorm=False,
@@ -249,6 +250,7 @@ class MPTFlamingo(nn.Module):
 
         # extra one exit
         self.use_extra_exit = use_extra_exit
+        self.detach_extra_exit = detach_extra_exit
         self.layerwise_exit_eval = layerwise_exit_eval
 
         if use_extra_exit:
@@ -484,7 +486,9 @@ class MPTFlamingo(nn.Module):
                 # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
                 rand_layer_feat = rand_layer_feat.flatten(0, 1)
                 # cut off gradient. Loss is used only for training the extra exit, not the backbone.
-                extra_exit_output = get_action(self.extra_exit, rand_layer_feat.detach(), state_tensor)
+                extra_exit_output = get_action(self.extra_exit, 
+                                               rand_layer_feat.detach() if self.detach_extra_exit else rand_layer_feat,
+                                               state_tensor)
                 # extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
             else:
                 # we only get the predicted values at the t timestep with input feature from all layers.
