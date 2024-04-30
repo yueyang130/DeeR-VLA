@@ -325,6 +325,7 @@ def main():
     
     # multi-exit eval
     parser.add_argument("--eval_exit_mode", type=str, default='last') # [last/all/dynamic] eval the last exit / all exits / dynamic exit mechanism
+    parser.add_argument("--layerwise_exit_eval", type=bool, default=False) 
     # timestep dynamic
     parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
     # dynamic early-exit
@@ -338,6 +339,7 @@ def main():
     print(f'{args.amp=}')
     print(f'{args.eval_exit_mode=}')
     print(f'{args.load_threshold=}')
+    print(f'{args.layerwise_exit_eval=}')
     
     args.real_data = True if 'real' in args.evaluate_from_checkpoint else False
     # Search for the pattern in args.evaluate_from_checkpoint
@@ -505,8 +507,10 @@ def main():
         dropout_mode=args.dropout_mode,
         mlp_layernorm=args.mlp_layernorm,
         lstm_layernorm=args.lstm_layernorm,
+        lstm_num_layers=args.lstm_num_layers,
         mlp_num_hidden_layers=args.mlp_num_hidden_layers,
         use_extra_exit=args.use_extra_exit,
+        layerwise_exit_eval=args.layerwise_exit_eval,
     )
     checkpoint_path = args.openflamingo_checkpoint
     print("Loading origin flamingo checkpoint from ", checkpoint_path)

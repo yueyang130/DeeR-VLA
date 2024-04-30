@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from train_utils import get_checkpoint, train_one_epoch_calvin, train_one_epoch_calvin_diff, train_one_epoch_calvin_cotrain, train_one_epoch_calvin_two_way, \
-train_one_epoch_calvin_multi_exit, get_ckpt_name, get_ckpt_name_pattern, save_ckpt
+train_one_epoch_calvin_multi_exit, get_ckpt_name, get_ckpt_name_pattern, save_ckpt, get_layerwise_lr_list, get_num_layer_for_flamingo
 from torch.distributed.elastic.multiprocessing.errors import record
 from transformers import (
     get_constant_schedule_with_warmup,
@@ -84,7 +84,13 @@ def main():
     parser.add_argument("--exit_learning_rate", default=1e-4, type=float)  # 1e-4
     parser.add_argument("--joint_learning_rate", default=1e-4, type=float)  # 1e-4
     parser.add_argument(
-        "--lr_scheduler",
+        "--joint_lr_scheduler",
+        default="constant",
+        type=str,
+        help="constant, linear, or cosine",
+    )
+    parser.add_argument(
+        "--exit_lr_scheduler",
         default="constant",
         type=str,
         help="constant, linear, or cosine",
@@ -334,7 +340,7 @@ def main():
     parser.add_argument("--multi_exit", action="store_true", default=False)
     parser.add_argument("--exit_interval", type=int, default=1, help='intervals between exits')
     parser.add_argument("--exit_weight", type=str, default='uniform', help='uniform/ascending/descending')
-    parser.add_argument("--exit_lr_scale", type=float, default=1.0, help='scale learning rate for exits')
+    parser.add_argument("--exit_lr_scale", type=float, default=1.0, help='scale learning rate for exits (only for joint training)')
     parser.add_argument("--exit_dropout", type=float, default=0.0, help='')
     parser.add_argument("--lstm_dropout", type=float, default=0.1, help='')
     parser.add_argument("--dropout_mode", default='wo_last', choices=['layerwise', 'last', 'wo_last'])
@@ -499,9 +505,12 @@ def main():
             )
 
         def apply_lr_scale(n, p):
-            if not only_head and is_head(n):
+            if not only_head and is_head(n): # scale head lr only when joint training
                 lr_scale = args.exit_lr_scale
-            else:
+            elif not only_head: # scale transformer layers lr when joint training
+                layer_id = get_num_layer_for_flamingo(n, len(layerwsie_lr_scale_list), args.exit_interval)
+                lr_scale = layerwsie_lr_scale_list[layer_id]
+            else: # not scale when only train exit
                 lr_scale = 1.0
 
             if lr_scale not in param_groups:
@@ -541,9 +550,21 @@ def main():
 
         return grouped_params 
 
-        
+
+    # if args.rank == 0:
+    #     print([n for n, p in model.named_parameters() if p.requires_grad])
+    #     print([n for n, p in model.perceiver.named_parameters() if p.requires_grad])
+    #     print([n for n, p in model.lang_encoder.named_parameters() if p.requires_grad])
+            
     args.exit_learning_rate = args.exit_learning_rate * args.batch_size_calvin / 6 # adaptive lr
     args.joint_learning_rate = args.joint_learning_rate * args.batch_size_calvin / 6 # adaptive lr
+    
+    layerwsie_lr_scale_list = get_layerwise_lr_list(args)
+    if args.rank == 0:
+        print(layerwsie_lr_scale_list)
+        print([{'lr': x['lr'], 'weight_decay': x['weight_decay'], 'num_params': sum(p.numel() for p in x['params']) / 1e6} for x in get_grouped_params(ddp_model, only_head=True)])
+        print([{'lr': x['lr'], 'weight_decay': x['weight_decay'], 'num_params': sum(p.numel() for p in x['params']) / 1e6} for x in get_grouped_params(ddp_model, only_head=False)])
+    
     exit_optimizer = torch.optim.AdamW(get_grouped_params(ddp_model, only_head=True), lr=args.exit_learning_rate)
     joint_optimizer = torch.optim.AdamW(get_grouped_params(ddp_model), lr=args.joint_learning_rate)
 
@@ -557,35 +578,41 @@ def main():
         print(f"Exit training steps: {exit_training_steps}")
         print(f"Joint training steps: {joint_training_steps}")
 
-    if args.lr_scheduler == "linear":
+    if args.exit_lr_scheduler == "linear":
         exit_lr_scheduler = get_linear_schedule_with_warmup(
             exit_optimizer,
             num_warmup_steps=args.exit_warmup_steps,
             num_training_steps=exit_training_steps,
         )
-        joint_lr_scheduler = get_linear_schedule_with_warmup(
-            joint_optimizer,
-            num_warmup_steps=args.joint_warmup_steps,
-            num_training_steps=joint_training_steps,
-        )
-    elif args.lr_scheduler == "cosine":
+    elif args.exit_lr_scheduler == "cosine":
         exit_lr_scheduler = get_cosine_schedule_with_warmup(
             exit_optimizer,
             num_warmup_steps=args.exit_warmup_steps,
             num_training_steps=exit_training_steps,
         )
+    elif args.exit_lr_scheduler == 'cosine_restart':
+        exit_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(exit_optimizer, T_0=10, T_mult=2, eta_min=1e-7)
+    else:
+        exit_lr_scheduler = get_constant_schedule_with_warmup(
+            exit_optimizer, num_warmup_steps=args.exit_warmup_steps
+        )
+
+        
+    if args.joint_lr_scheduler == "linear":
+        joint_lr_scheduler = get_linear_schedule_with_warmup(
+            joint_optimizer,
+            num_warmup_steps=args.joint_warmup_steps,
+            num_training_steps=joint_training_steps,
+        )
+    elif args.joint_lr_scheduler == "cosine":
         joint_lr_scheduler = get_cosine_schedule_with_warmup(
             joint_optimizer,
             num_warmup_steps=args.joint_warmup_steps,
             num_training_steps=joint_training_steps,
         )
-    elif args.lr_scheduler == 'cosine_restart':
-        exit_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(exit_optimizer, T_0=10, T_mult=2, eta_min=1e-7)
+    elif args.joint_lr_scheduler == 'cosine_restart':
         joint_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(joint_optimizer, T_0=10, T_mult=2, eta_min=1e-7)
     else:
-        exit_lr_scheduler = get_constant_schedule_with_warmup(
-            exit_optimizer, num_warmup_steps=args.exit_warmup_steps
-        )
         joint_lr_scheduler = get_constant_schedule_with_warmup(
             joint_optimizer, num_warmup_steps=args.joint_warmup_steps
         )

@@ -63,6 +63,7 @@ class MPTFlamingo(nn.Module):
         dropout_mode='layerwise',
         # for dynamic exit
         use_extra_exit=False,
+        layerwise_exit_eval=False,
         mlp_layernorm=False,
         lstm_layernorm=False,
         mlp_num_hidden_layers=3,
@@ -244,12 +245,19 @@ class MPTFlamingo(nn.Module):
             for i in range(exit_interval-1, early_exit_layer, exit_interval):
                 self.lm_exits[i] = get_encoder()
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
-            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one internal exit!')      
+            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one internal exit!')     
 
         # extra one exit
         self.use_extra_exit = use_extra_exit
+        self.layerwise_exit_eval = layerwise_exit_eval
+
         if use_extra_exit:
             self.extra_exit = get_encoder()
+        
+            if not self.layerwise_exit_eval:
+                print('eval the extra exit!') 
+            else:
+                print('eval layerwise exits!') 
         
     def get_all_exit_idx(self):
         # not include the extra exit
@@ -432,7 +440,7 @@ class MPTFlamingo(nn.Module):
             if exit_id < 0:
                 exit_id += self.lang_encoder.config.n_layers
             assert 0 <= exit_id < self.lang_encoder.config.n_layers
-            if self.use_extra_exit:
+            if self.use_extra_exit and not self.layerwise_exit_eval:
                 # only use the extra exit for inference
                 exit_head = self.extra_exit
             else:

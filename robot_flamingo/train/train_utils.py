@@ -12,6 +12,7 @@ from einops import rearrange
 from torch.cuda.amp import GradScaler
 import os
 from models.value_net import value_to_bin_index, get_bin_boundaries, get_similarity
+import re
 
 def get_cast_dtype(precision: str):
     cast_dtype = None
@@ -132,6 +133,8 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'multi-exit_'
         ckpt_name += args.exit_weight
         ckpt_name += '_interval={}_'.format(args.exit_interval)
+    if args.layer_decay != 1.0:
+        ckpt_name += 'layerdecay={}_'.format(args.layer_decay)
     if args.feat_distill_coef > 0:
         ckpt_name += 'distill={}_'.format(args.feat_distill_coef)
     if args.use_extra_exit:
@@ -144,8 +147,6 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'lstm{}L_'.format(args.lstm_num_layers)
     if args.lstm_layernorm:
         ckpt_name += 'lstmln_'
-    if args.exit_lr_scale != 1.0:
-        ckpt_name += 'lr_scale={}_'.format(args.exit_lr_scale)
     if args.exit_dropout != 0:
         ckpt_name += 'mlpdrp={}_{}_'.format(args.exit_dropout, args.dropout_mode)    
     if args.lstm_dropout != 0:
@@ -205,8 +206,13 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'tcp_'
     if args.decoder_type != 'lstm':
         ckpt_name += '{}_{}_'.format(args.decoder_type, args.hidden_size)
-    if args.lr_scheduler != 'constant':
-        ckpt_name += '{}_'.format(args.lr_scheduler)  
+    ckpt_name += 'jointlr_{:.6f}_'.format(args.joint_learning_rate) 
+    if args.joint_lr_scheduler != 'constant':
+        ckpt_name += '{}_'.format(args.joint_lr_scheduler) 
+    if args.exit_lr_scale != 1.0:
+        ckpt_name += 'exitscale={}_'.format(args.exit_lr_scale) 
+    if args.exit_lr_scheduler != 'constant':
+        ckpt_name += 'exitlr_{}_'.format(args.exit_lr_scheduler)  
     
     return ckpt_name
 
@@ -229,18 +235,55 @@ def get_ckpt_name_pattern(args):
     return ckpt_name
 
 
+def get_num_layer_for_flamingo(var_name, num_max_layer, exit_interval):
+    """
+    Divide [3, 3, 27, 3] layers into 12 groups; each group is three 
+    consecutive blocks, including possible neighboring downsample layers;
+    adapted from https://github.com/microsoft/unilm/blob/master/beit/optim_factory.py
+    """
+    if var_name.startswith("module"):
+        var_name = var_name.replace('module.', '')
+    
+    if var_name.startswith("lang_encoder.transformer.blocks"):
+        match = re.search(r'blocks\.(\d+)', var_name)
+        block_id = int(match.group(1))
+        layer_id = int(block_id / exit_interval)
+    elif var_name.startswith("lang_encoder.transformer.wte") or var_name.startswith('lang_encoder.transformer.ln_f'):
+        layer_id = num_max_layer-2
+    elif var_name.startswith("perceiver") or var_name.startswith("vision_encoder"):
+        layer_id = num_max_layer-1
+    else:
+        raise NotImplementedError(f"Unknown parameter {var_name}")
+
+    return layer_id
+    
+    
+def get_layerwise_lr_list(args):
+    num_layers = int((args.early_exit_layer + 1) / args.exit_interval)
+    lr_scale_list = list(args.layer_decay ** (num_layers - 1 - i) for i in range(num_layers))
+    embedding_lr_scale = lr_scale_list[0]
+    perceiver_lr_scale = 1.0
+    lr_scale_list.extend([embedding_lr_scale, perceiver_lr_scale])
+    return lr_scale_list
+
+
 def get_exit_weights(weight_mode, num, use_extra_exit, device):
+    if not use_extra_exit:
+        raise NotImplementedError
+    
     if weight_mode == 'uniform':
         weight = torch.ones(num, dtype=torch.float32, device=device)
     elif weight_mode == 'ascending':
-        weight = torch.arange(1, num+1, dtype=torch.float32, device=device)
+        weight = torch.arange(1, num+1, dtype=torch.float32, device=device) # 1,2,3,4,..,N, placehold
     elif weight_mode == 'descending':
-        weight = torch.arange(num+1, 1, step=-1, dtype=torch.float32, device=device)
+        weight = torch.arange(num-1, -1, step=-1, dtype=torch.float32, device=device) # N,...,2,1, placehold
+        
         
     if use_extra_exit:
-        extra_weight = weight[:num-1].mean()
-        weight[num-1] = extra_weight
-    weight = weight / weight.sum()
+        weight[:-1] = weight[:-1] / weight[:-1].mean()
+        weight[-1] = 1.0
+    else:
+        weight = weight / weight.mean()
     return weight
 
 def train_one_epoch_calvin_diff(
@@ -1011,7 +1054,11 @@ def train_one_epoch_calvin_multi_exit(
             dim = loss_calvin.dim()
             loss_calvin = loss_calvin.mean(dim=tuple(range(1, dim)))
             weights = get_exit_weights(args.exit_weight, len(all_outputs), args.use_extra_exit, device=loss_calvin.device)
+            if args.rank == 0 and num_steps <= 1:
+                print(weights)
+            # print(loss_calvin)
             loss_calvin *= weights
+            # print(loss_calvin)
             loss_calvin = loss_calvin.sum() # since weights are normalzied, thus sum losses of all exits
             
             # feature distillation
@@ -1127,7 +1174,7 @@ def train_one_epoch_calvin_multi_exit(
                 
                 log_dict = {
                         "lr": 0 if only_train_head else optimizer.param_groups[0]["lr"],
-                        "exit_lr": optimizer.param_groups[0]["lr"] if only_train_head else optimizer.param_groups[2]["lr"],
+                        "exit_lr": optimizer.param_groups[0]["lr"] if only_train_head else optimizer.param_groups[-1]["lr"],
                         "loss_calvin": divided_loss_calvin.item(),
                         "loss_calvin_bin": loss_calvin_bin.mean().item(),
                         "loss_calvin_num": loss_calvin_num.mean().item(),

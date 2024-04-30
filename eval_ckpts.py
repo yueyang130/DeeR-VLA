@@ -17,6 +17,7 @@ parser.add_argument(
         action="store_true"
     )
 parser.add_argument("--eval_exit_mode", type=str, default='last', choices=['last', 'all', 'dynamic']) # only eval the last exit / all exits / dynamic early-exit mechanism
+parser.add_argument("--layerwise_exit_eval", action='store_true', default=False) 
 parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
 
 # Parse the arguments
@@ -98,8 +99,32 @@ ckpt_names = [
     # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.2_last_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
     # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp1L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp1L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
-    'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
-    'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstm2L_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstm3L_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstm2L_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstm3L_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'resume_lstm2L_4+5_strategy=post_4+7_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstm2L_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_9.pth',
+    # 'resume_lstm2L_4+5_strategy=post_4+7_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstm2L_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_10.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_avgpool_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_avgpool_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.2_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.2_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_layerdecay=0.6_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_layerdecay=0.8_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_layerdecay=1.2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_layerdecay=1.4_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_layerdecay=0.6_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_layerdecay=0.8_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_layerdecay=1.2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_layerdecay=1.4_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_lstmdrp=0.1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_descending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_descending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_ascending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_ascending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
 ]
 
 print(ckpt_names)
@@ -110,11 +135,16 @@ for ckpt_name in ckpt_names:
         use_gripper = 1
         use_state = 0
         ckpt_path = os.path.join(args.ckpt_dir, ckpt_name)
+        if not os.path.exists(ckpt_path):
+            print("ckpt doesn't exist, skipped.")
+            continue
         # value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_4.pth')
         value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_discrete_b20_4.pth')
         log_dir = f'log_{args.ckpt_dir}'
         os.makedirs(log_dir, exist_ok=True)
         prefix = 'evaluate'
+        if args.layerwise_exit_eval:
+            prefix += '_per_exit'
         if args.amp:
             prefix += '_amp'
         prefix += f'_{args.eval_exit_mode}'
@@ -147,6 +177,6 @@ for ckpt_name in ckpt_names:
         # print('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state))
         # exit(0)
 
-        os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, 
-            use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode, args.multi_execution, value_net_ckpt_path, r))
+        os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, 
+            use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode, args.multi_execution, value_net_ckpt_path, r, args.layerwise_exit_eval))
 
