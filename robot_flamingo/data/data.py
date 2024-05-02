@@ -1070,7 +1070,7 @@ def get_calvin_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     )
     preprocess_text_fn = functools.partial(preprocess_text_calvin, tokenizer=tokenizer)
 
-    dataset_dir = Path(dataset_path) / ("training" if not hasattr(args, 'validation_set') or not args.validation_set else "validation")
+    dataset_dir = Path(dataset_path) / ("training" if not args.validation_set else "validation")
     
     calvin_dataset = DiskCalvinDataset(
         datasets_dir=dataset_dir,

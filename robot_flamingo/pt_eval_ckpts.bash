@@ -28,6 +28,7 @@ multi_execution=${11}
 value_net_ckpt=${12}
 exit_ratio=${13}
 layerwise_exit_eval=${14}
+value_type=${15}
 export MESA_GL_VERSION_OVERRIDE=4.1
 echo logging to ${log_file}
 
@@ -71,7 +72,6 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --fusion_mode ${fusion_mode} \
     --run_name RobotFlamingoDBG \
     --calvin_dataset ${calvin_dataset_path} \
-    --validation_set \
     --cross_attn_every_n_layers 4 \
     --evaluate_from_checkpoint ${evaluate_from_checkpoint} \
     --calvin_conf_path ${calvin_conf_path} \
@@ -81,6 +81,8 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --value_net_ckpt ${value_net_ckpt} \
     --exit_ratio ${exit_ratio} \
     --layerwise_exit_eval ${layerwise_exit_eval} \
+    --value_type ${value_type} \
+    --validation_set \
     --workers 1 > ${log_file} 2>&1
 fi
 

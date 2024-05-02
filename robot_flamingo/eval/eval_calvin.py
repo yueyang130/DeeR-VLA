@@ -20,7 +20,7 @@ from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp, check_loaded_parameters
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-from models.value_net import LSTMValueHead, ExitController, DiffValueHead, SimValueNet
+from models.value_net import LSTMValueHead, ExitController, DiffValueHead, SimValueNet, TimeValueNet
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed)
@@ -226,8 +226,8 @@ def main():
     parser.add_argument(
         "--data_percent", 
         type=float, 
-        default=0.1
-        # default=0.005
+        default=0.1,
+        # default=1.0,
     )
     parser.add_argument(
         "--debug",
@@ -325,7 +325,7 @@ def main():
     
     # multi-exit eval
     parser.add_argument("--eval_exit_mode", type=str, default='last') # [last/all/dynamic] eval the last exit / all exits / dynamic exit mechanism
-    parser.add_argument("--layerwise_exit_eval", type=bool, default=False) 
+    parser.add_argument("--layerwise_exit_eval", type=int, default=0) 
     # timestep dynamic
     parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
     # dynamic early-exit
@@ -340,6 +340,11 @@ def main():
     print(f'{args.eval_exit_mode=}')
     print(f'{args.load_threshold=}')
     print(f'{args.layerwise_exit_eval=}')
+    
+    if args.value_type == 'loss':
+        args.batch_size_calvin = 32
+    else:
+        args.batch_size_calvin = 16
     
     args.real_data = True if 'real' in args.evaluate_from_checkpoint else False
     # Search for the pattern in args.evaluate_from_checkpoint
@@ -551,6 +556,7 @@ def main():
     ddp_model.load_state_dict(ckpt_dict, False)  # 只保存了求梯度的部分
     ddp_model.eval()
     
+    value_net_ckpt = None
     if args.eval_exit_mode == 'dynamic':
         if args.value_type == 'loss':
             assert args.value_net_ckpt is not None, "Please specify a checkpoint for value net."
@@ -593,12 +599,15 @@ def main():
             value_net_ckpt_dict = {k.replace('value_net.', 'head.'): v for k, v in value_net_ckpt_dict.items()} # Be compatible with previous value_net code
             value_net.load_state_dict(value_net_ckpt_dict, True)
             
-            exit_controller = ExitController(value_net, num_exit, exit_id_list=model.get_all_exit_idx(), leq=True)
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=True)
         
         elif args.value_type == 'sim':
-            value_net = SimValueNet()
-            exit_controller = ExitController(value_net, num_exit, exit_id_list=model.get_all_exit_idx(), leq=True)
-            
+            value_net = SimValueNet(pooling=False, exit_ids=model.get_all_exit_idx(), interval=args.exit_interval)
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=False)
+            # exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=True)
+        elif args.value_type == 'time':
+            value_net = TimeValueNet(T=180, exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx())
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx())
         else:
             raise NotImplementedError
             
@@ -617,15 +626,15 @@ def main():
         calvin_loader = calvin_dataset.dataloader
         
         # find threshold
-        values = value_net_ckpt["values"] if "values" in value_net_ckpt else None
+        values = value_net_ckpt["values"] if args.value_type=='loss' and value_net_ckpt and  "values" in value_net_ckpt else None
         if args.load_threshold and values is not None:
             print(f'load values for threshold')
             ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, values)
         else:
             values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio)
-            value_net_ckpt["values"] = values
-            if args.rank==0: print("save new values for threshold to value net ckpt.")
-            torch.save(value_net_ckpt, args.value_net_ckpt)
+            # value_net_ckpt["values"] = values
+            # if args.rank==0: print("save new values for threshold to value net ckpt.")
+            # torch.save(value_net_ckpt, args.value_net_ckpt)
         
     else:
         ddp_exit_controller = None

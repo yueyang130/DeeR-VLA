@@ -301,7 +301,8 @@ def create_model_and_transforms(
         print(
             f"Flamingo model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)/1e6:.2f}M trainable parameters"
         )
-        print(model.extra_exit)
+        if hasattr(model, 'extra_exit'):
+            print(model.extra_exit)
     
 
     return model, image_processor, text_tokenizer

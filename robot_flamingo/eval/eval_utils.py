@@ -76,9 +76,12 @@ def count_exit_ratio(exit_results, n_layers):
     return layer_ratio
     
 
-def print_and_save(results, exit_results, sequences, log_dir, n_layer, epoch=None):
+def print_and_save(results, success_exit_results, fail_exit_results, step_results, sequences, log_dir, n_layer, epoch=None):
     current_data = {}
     print(f"Results for Epoch {epoch}:")
+    step_results = np.array(step_results)
+    print(step_results.shape)
+    print(step_results)
     avg_seq_len = np.mean(results)
     chain_sr = {i + 1: sr for i, sr in enumerate(count_success(results))}
     print(f"Average successful sequence length: {avg_seq_len}")
@@ -86,10 +89,19 @@ def print_and_save(results, exit_results, sequences, log_dir, n_layer, epoch=Non
     for i, sr in chain_sr.items():
         print(f"{i}: {sr * 100:.1f}%")
     
-    layer_ratio = count_exit_ratio(exit_results, n_layer)
-    print(f"Early Exit | Total steps : {len(exit_results)} | VLM n_layer: {n_layer} | Average : {np.mean(exit_results)+1:.1f} | Min : {np.min(exit_results)+1} | Max : {np.max(exit_results)+1}")
-    print("Early exit rates for layer i in a row:")
-    for i, exit_ratio in enumerate(layer_ratio):
+
+    success_layer_ratio = count_exit_ratio(success_exit_results, n_layer)
+    fail_layer_ratio = count_exit_ratio(fail_exit_results, n_layer)
+    print(f"Early Exit (success tasks) | Total steps : {len(success_exit_results)} | VLM n_layer: {n_layer} | Average : {np.mean(success_exit_results)+1:.1f} | Min : {np.min(success_exit_results)+1} | Max : {np.max(success_exit_results)+1}")
+    print(f"Early Exit (fail tasks) | Total steps : {len(fail_exit_results)} | VLM n_layer: {n_layer} | Average : {np.mean(fail_exit_results)+1:.1f} | Min : {np.min(fail_exit_results)+1} | Max : {np.max(fail_exit_results)+1}")
+    
+    print(f"Total Successful steps: {np.sum(step_results)} | Avg steps per successful subtask: {np.mean(step_results):.1f} | Min: {np.min(step_results)} | Max: {np.max(step_results)}")
+    
+    print("Early exit rates for layer i in successful tasks:")
+    for i, exit_ratio in enumerate(success_layer_ratio):
+        print(f'{i+1}: {exit_ratio * 100:.1f}%')
+    print("Early exit rates for layer i in failed tasks:")
+    for i, exit_ratio in enumerate(fail_layer_ratio):
         print(f'{i+1}: {exit_ratio * 100:.1f}%')
 
     cnt_success = Counter()
@@ -580,7 +592,9 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
     interval_len = int(NUM_SEQUENCES // device_num)
     eval_sequences = eval_sequences[device_id*interval_len:min((device_id+1)*interval_len, NUM_SEQUENCES)]
     results = []
-    exit_layers_list = [] # seq, subtask, timestep
+    success_exit_layers_list = [] # seq, subtask, timestep
+    fail_exit_layers_list = [] # seq, subtask, timestep
+    success_task_num_list = [] # seq, subtask
     plans = defaultdict(list)
     local_sequence_i = 0
     base_sequence_i = device_id * interval_len
@@ -590,8 +604,10 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
         eval_sequences = tqdm(eval_sequences, position=0, leave=True)
 
     for initial_state, eval_sequence in eval_sequences:
-        result, seq_exit_layers = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, plans, debug, eval_log_dir, base_sequence_i+local_sequence_i, reset=reset, diverse_inst=diverse_inst)
-        exit_layers_list.append(seq_exit_layers)
+        result, success_seq_exit_layers, fail_seq_exit_layers, seq_success_task_steps = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, plans, debug, eval_log_dir, base_sequence_i+local_sequence_i, reset=reset, diverse_inst=diverse_inst)
+        success_exit_layers_list.append(success_seq_exit_layers)
+        fail_exit_layers_list.append(fail_seq_exit_layers)
+        success_task_num_list.append(seq_success_task_steps)
         results.append(result)
         if not debug:
             eval_sequences.set_description(
@@ -608,16 +624,17 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
 
     eval_sequences = extract_iter_from_tqdm(eval_sequences)
 
-    res_tup = [(res, exit_res, eval_seq) for res, exit_res, eval_seq in zip(results, exit_layers_list, eval_sequences)]
+    res_tup = list(zip(results, success_exit_layers_list, fail_exit_layers_list, success_task_num_list, eval_sequences))
     all_res_tup = [copy.deepcopy(res_tup) for _ in range(device_num)] if torch.distributed.get_rank() == 0 else None
     torch.distributed.gather_object(res_tup, all_res_tup, dst=0)
 
     if torch.distributed.get_rank() == 0:
         res_tup_list = merge_multi_list(all_res_tup)
-        res_list = [_[0] for _ in res_tup_list]
-        exit_list = [_[1] for _ in res_tup_list]
-        eval_seq_list = [_[2] for _ in res_tup_list]
-        print_and_save(res_list, merge_multi_list(exit_list), eval_seq_list, eval_log_dir, n_layer, epoch)
+        
+        res_list, success_exit_list, fail_exit_list, step_list, eval_seq_list = map(list, zip(*res_tup_list))
+
+        print_and_save(res_list, merge_multi_list(success_exit_list),merge_multi_list(fail_exit_list), 
+                       merge_multi_list(step_list), eval_seq_list, eval_log_dir, n_layer, epoch)
 
     return results
 
@@ -630,7 +647,9 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
     env.reset(robot_obs=robot_obs, scene_obs=scene_obs)
 
     success_counter = 0
-    exit_layers_list = []
+    success_task_step_list = []
+    fail_exit_layers_list = []
+    success_exit_layers_list = []
     if debug:
         time.sleep(1)
         print()
@@ -639,20 +658,23 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
         print("Subtask: ", end="")
     for subtask_i, subtask in enumerate(eval_sequence):
         if reset:
-            success, exit_layers = rollout(env, model, task_checker, subtask, val_annotations, plans, debug, eval_log_dir, subtask_i, sequence_i, robot_obs=robot_obs, scene_obs=scene_obs, diverse_inst=diverse_inst)
+            success, exit_layers, num_steps = rollout(env, model, task_checker, subtask, val_annotations, plans, debug, eval_log_dir, subtask_i, sequence_i, robot_obs=robot_obs, scene_obs=scene_obs, diverse_inst=diverse_inst)
         else:
-            success, exit_layers = rollout(env, model, task_checker, subtask, val_annotations, plans, debug, eval_log_dir, subtask_i, sequence_i,diverse_inst=diverse_inst)
-        exit_layers_list.append(exit_layers)
+            success, exit_layers, num_steps = rollout(env, model, task_checker, subtask, val_annotations, plans, debug, eval_log_dir, subtask_i, sequence_i,diverse_inst=diverse_inst)
         
         n_layer = model.model.module.lang_encoder.config.n_layers
         layer_ratio = count_exit_ratio(exit_layers, n_layer)
-        print(("(success) " if success else "(fail) ") +  " ".join([f"{i + 1}/{n_layer} : {v * 100:.1f}% |" for i, v in enumerate(layer_ratio)]) + "|")
+        if subtask_i == 0: print('')
+        print(("(success) " if success else "(fail) ") + f'{num_steps} steps: ' +  " ".join([f"{i + 1}/{n_layer} : {v * 100:.1f}% |" for i, v in enumerate(layer_ratio)]) + "|")
         
         if success:
             success_counter += 1
+            success_task_step_list.append(num_steps)
+            success_exit_layers_list.append(exit_layers)
         else:
-            return success_counter, merge_multi_list(exit_layers_list)
-    return success_counter, merge_multi_list(exit_layers_list)
+            fail_exit_layers_list.append(exit_layers)
+            return success_counter, merge_multi_list(success_exit_layers_list), merge_multi_list(fail_exit_layers_list), success_task_step_list
+    return success_counter, merge_multi_list(success_exit_layers_list), merge_multi_list(fail_exit_layers_list), success_task_step_list
 
 
 def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug, eval_log_dir='', subtask_i=-1, sequence_i=-1, robot_obs=None, scene_obs=None, diverse_inst=False):
@@ -691,6 +713,8 @@ def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug, eva
                 model.exit_controller.module.value_net.history_memory = model.exit_controller.module.value_net.history_memory[-model.refresh:]
             else:
                 model.reset()
+        if hasattr(model, 'exit_controller') and model.exit_controller is not None:
+            model.exit_controller.module.set_timestep(step)
         action = model.step(obs, lang_annotation, (len(planned_actions) == 0))
         exit_layers.append(model.current_exit_layer)
         if len(planned_actions) == 0:
@@ -716,12 +740,12 @@ def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug, eva
                 print(colored("success", "green"), end=" ")
                 img_clip = ImageSequenceClip(img_queue, fps=30)
                 img_clip.write_gif(os.path.join(eval_log_dir, f'{sequence_i}-{subtask_i}-{subtask}-succ.gif'), fps=30)
-            return True, exit_layers
+            return True, exit_layers, step+1
     if debug:
         print(colored("fail", "red"), end=" ")
         img_clip = ImageSequenceClip(img_queue, fps=30)
         img_clip.write_gif(os.path.join(eval_log_dir, f'{sequence_i}-{subtask_i}-{subtask}-fail.gif'), fps=30)
-    return False, exit_layers
+    return False, exit_layers, step+1
 
 def eval_one_epoch_calvin(args, model, dataset_path, image_processor, tokenizer, future_act_len=-1):
 

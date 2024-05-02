@@ -270,8 +270,6 @@ def get_layerwise_lr_list(args):
 
 
 def get_exit_weights(weight_mode, num, use_extra_exit, device):
-    if not use_extra_exit:
-        raise NotImplementedError
     
     if weight_mode == 'uniform':
         weight = torch.ones(num, dtype=torch.float32, device=device)

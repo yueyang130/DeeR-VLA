@@ -6,6 +6,8 @@ import copy
 from typing import Optional, Tuple
 from tqdm.auto import tqdm
 import math
+from abc import abstractmethod
+import numpy as np
 
 def get_similarity(f_x1s, f_x2s, detach_f1=False):
     if detach_f1:
@@ -57,6 +59,25 @@ def get_cast_dtype(precision: str):
     return cast_dtype
 
 
+class BaseValueNet(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+        # dummy for DDP wrapper
+        self.head = torch.nn.Linear(10, 10)
+      
+    @abstractmethod  
+    def clear_hidden_state(self) -> None:
+        pass
+    
+    @abstractmethod
+    def update_memory(self):
+        pass
+    
+    @abstractmethod
+    def set_bin_boundaries(self, bin_boundaries):
+        pass
+           
 
 class DiffValueHead(nn.Module):
     # infer the value by considering the agreement between exit features
@@ -462,33 +483,100 @@ class LSTMValueHead(nn.Module):
             return values
         
         
-class SimValueNet(nn.Module):
-    def __init__(self) -> None:
+class SimValueNet(BaseValueNet):
+    def __init__(self, pooling, exit_ids, interval) -> None:
         super().__init__()
+        self.pooling = pooling
+        self.interval = interval
+        self.exit_ids = exit_ids
+        
+        print('Settings for SimValueNet:')
+        print(f'{self.pooling=}')
+        print(f'{self.interval=}')
         
     def forward(  # type: ignore
         self,
-        input_feature: torch.Tensor,
-    ):
-        if infer:
-            pass
-        # (num_layer, bs * action_seq_len, lang_len, d) --> (num_exit * bs * action_seq_len, lang_len, d)
-        if input_feature.dim() == 4:
-            input_feature = input_feature.reshape(-1, *input_feature.shape[2:])
-        # reshape
-        if input_feature.dim() == 3: # (num_exit * bs * action_seq_len, lang_len, d)
-            input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (num_exit * bs * seq_len, d) maxpooling along lang_seq
-        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (num_exit * bs, seq_len, d)
+        feats: torch.Tensor,
+        i=None,
+        mode='infer',
+        ):
         
+        if mode == 'infer':
+            assert i > 0, 'the first layer similarity is not implemented yet'
+            if i > 0 and i - self.interval < 0:
+                prev_i = 0
+            else:
+                prev_i = i - self.interval
+                
+            if self.pooling:
+                prev_feats = torch.max(feats[prev_i], dim=-2)[0] # (n_exit, bs * action_seq_len, d)
+                last_feats = torch.max(feats[i], dim=-2)[0]
+                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len)
+            else:
+                sim = get_similarity(feats[i], feats[prev_i], detach_f1=True) # (n_exit, bs * action_seq_len, lang_len)
+                sim = sim.mean(dim=-1)    
+                
+            return sim
+        else:
+            last_feats = torch.stack([feats[i] for i in self.exit_ids], dim=0) # (n_exit, bs * action_seq_len, lang_len, d)
+            
+            prev_feats = torch.zeros_like(last_feats)
+            for i, exit_id in enumerate(self.exit_ids):
+                if exit_id - self.interval >= 0:
+                    prev_feats[i] = feats[exit_id-self.interval]
+                elif exit_id > 0:
+                    prev_feats[i] = feats[0]
+                else:
+                    raise NotImplementedError
+            
+            if self.pooling:
+                prev_feats = torch.max(prev_feats, dim=-2)[0] # (n_exit, bs * action_seq_len, d)
+                last_feats = torch.max(last_feats, dim=-2)[0]
+                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len)
+            else:
+                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len, lang_len)
+                sim = sim.mean(dim=-1)
+        
+            return sim
+        
+
+class TimeValueNet(BaseValueNet):
+    """
+    Increasing computation as timestep goes in a subtask.
+    Total computation increases with larger alpha.
+    """
+    
+    def __init__(self, T, exit_ratio, exit_list) -> None:
+        super().__init__()
+        self.T = T
+        self.exit_list = exit_list
+        self.max_exit = exit_list[-2]
+        
+        probs = exit_ratio ** torch.arange(1, len(exit_list)+1) # n (including the last exit)
+        probs /= probs.sum()
+        self.ratios = np.array(probs)
+        
+        self.threshold_steps = np.cumsum(self.ratios) * T
+        
+    def set_timestep(self, t):
+        self.t = t
+        
+    def forward(self, exit_id):
+        for i, thres in enumerate(self.threshold_steps):
+            if self.t < thres:
+                break
+        cur_exit_id = self.exit_list[i]
+        return exit_id >= cur_exit_id or exit_id >= self.max_exit
+            
         
 class ExitController(torch.nn.Module):
-    def __init__(self, value_net, exit_id_list, exit_interval, leq=True):
+    def __init__(self, value_net, exit_id_list, leq=True):
         super().__init__()
         self.value_net = value_net
         self.thresholds = None
         self.leq = leq
         self.exit_id_list = exit_id_list
-        self.exit_interval = exit_interval
+        self.num_exit = len(self.exit_id_list)
         # for debug
         # self.history_values = [[] for i in range(num_exit)]
         
@@ -496,7 +584,13 @@ class ExitController(torch.nn.Module):
         if values is None:  
             device_id = torch.distributed.get_rank()
             num_devices = torch.distributed.get_world_size()
-            pred_value_list, target_value_list = generate_values(args, model, self.value_net, dataloader, device_id=device_id)
+            if isinstance(self.value_net, LSTMValueHead):
+                pred_value_list, target_value_list = generate_values(args, model, self.value_net, dataloader, device_id=device_id)
+            elif isinstance(self.value_net, SimValueNet):
+                pred_value_list, target_value_list = generate_sim_values(args, model, self.value_net, dataloader, device_id=device_id)
+            elif isinstance(self.value_net, TimeValueNet):
+                self.thresholds = {}
+                return
 
             # Initialize tensors to hold the gathered data
             pred_value_gathered = [torch.zeros_like(pred_value_list) for _ in range(num_devices)]
@@ -554,22 +648,30 @@ class ExitController(torch.nn.Module):
         if args.rank == 0:
             print(f'Mean value for each layer:')
             for i in range(n_stage):
-                print(f'{i+1} : {pred_value_gathered[i].mean():.5f}, {pred_value_gathered[i].std():.5f}')
+                print(f'{i+1} : {pred_value_gathered[i].mean():.5f}, {pred_value_gathered[i].std():.5f}, {pred_value_gathered[i].max():.5f}, {pred_value_gathered[i].min():.5f}')
             print(f'Find threshold on {n_sample} samples:')
             for i in range(n_stage):
                 print(f'{i+1} : {T[i]:.5f}')
         return pred_value_gathered
-                
+    
+    def set_timestep(self, t):
+        if isinstance(self.value_net, TimeValueNet):
+            self.value_net.set_timestep(t)
 
     @torch.no_grad()  
     def forward(self, x, i):
         assert self.thresholds is not None, "Please set thresholds before calling forward"
+        assert isinstance(i, int), 'index muast be integer'
+        if i not in self.exit_id_list:
+            return False
+        
+        if isinstance(self.value_net, TimeValueNet):
+            return self.value_net(i)
         
         if isinstance(self.value_net, LSTMValueHead):
             value = self.value_net(x[i], return_value=True)
         elif isinstance(self.value_net, SimValueNet):
-            value = get_similarity(x[i], x[i-self.exit_interval])
-            value = value.mean()
+            value = self.value_net(x, i)
         else:
             raise NotImplementedError
 
@@ -614,7 +716,8 @@ def generate_sim_values(
     )
     t.set_description(f"generate values by similarity")
     mv_avg_loss = []
-    pred_value_list, target_value_list = [], []
+    pred_value_list = []
+    
     for num_steps, batch_calvin in t:
         global_step = num_steps
         
@@ -669,7 +772,7 @@ def generate_sim_values(
        
         with torch.cuda.amp.autocast(enabled=args.amp), torch.no_grad():
             if args.head_type == 'deterministic':
-                final_output, exit_outputs = model(
+                final_output, exit_outputs, extra_exit_output = model(
                     vision_x=images,
                     lang_x=input_ids,
                     attention_mask=attention_mask,
@@ -682,20 +785,13 @@ def generate_sim_values(
                 # get joint outputs
                 all_outputs = exit_outputs + [final_output.logits]
 
-            features = torch.stack(final_output.hidden_states, dim=0) 
-            values = value_net(features, return_value=True) # (exits, bs * seq_len, lang_len, 1) -> (exits * bs, seq_len, 1)
-            values = values.reshape(len(all_outputs), -1, values.shape[1]) # (exits, bs, seq_len)
-            target_values = loss_calvin.detach()
-            
+        feats = final_output.hidden_states # n_exit x (bs * action_seq_len, lang_len, d)
+        sim = value_net(feats, mode='generate')
         # record
-        pred_value_list.append(values)  
-        # target_value_list.append(target_values)
-
+        pred_value_list.append(sim)  
 
     pred_value_list = torch.cat(pred_value_list, dim=1)
-    # target_value_list = torch.cat(target_value_list, dim=1)
-    # flatten bs and action length
-    pred_value_list = pred_value_list.flatten(1, 2)
+    # pred_value_list = pred_value_list.flatten(1, 2)
         
     # return pred_value_list, target_value_list
     return pred_value_list, None
