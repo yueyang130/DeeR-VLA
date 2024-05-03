@@ -43,6 +43,7 @@ def save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, step, extra_optim
         "state_dependent_std": args.state_dependent_std,
         "early_exit_layer": args.early_exit_layer,
         "multi_exit": args.multi_exit,
+        "share_exit": args.share_exit,
         "use_extra_exit": args.use_extra_exit,
         "exit_interval": args.exit_interval,
         "exit_weight": args.exit_weight,
@@ -84,6 +85,7 @@ def save_value_net_ckpt(args, ddp_value_net, optimizer, lr_scheduler, epoch, ste
         "with_time_embed": args.with_time_embed,
         "discrete": args.discrete,
         "num_bin": args.num_bin,
+        "value_net_type": args.value_net_type,
         "model_state_dict": ddp_value_net.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "lr_scheduler_state_dict": lr_scheduler.state_dict(),
@@ -93,9 +95,9 @@ def save_value_net_ckpt(args, ddp_value_net, optimizer, lr_scheduler, epoch, ste
 
     ckpt_name = os.path.basename(robo_ckpt_path)[:-4]
     
-    value_prefix = 'value_net'
+    value_prefix = f'value_net_{args.value_net_type}'
     if args.discrete:
-            value_prefix += f'_discrete_b{args.num_bin}'
+            value_prefix += f'_b{args.num_bin}'
     
     if epoch != -1:
         if epoch > 1000:
@@ -131,8 +133,11 @@ def get_ckpt_prefix(args, train_value=False):
     ckpt_name += 'exit_layer_{}_'.format(args.early_exit_layer)
     if args.multi_exit:
         ckpt_name += 'multi-exit_'
-        ckpt_name += args.exit_weight
-        ckpt_name += '_interval={}_'.format(args.exit_interval)
+        if args.share_exit:
+            ckpt_name += 'share_'
+        if args.exit_weight != 'uniform':
+            ckpt_name += f'{args.exit_weight}_'
+        ckpt_name += 'interval={}_'.format(args.exit_interval)
     if args.layer_decay != 1.0:
         ckpt_name += 'layerdecay={}_'.format(args.layer_decay)
     if args.feat_distill_coef > 0:
@@ -2963,68 +2968,70 @@ def train_value_net_one_epoch_calvin_dynamic_exit_debug(
         labels = [labels[..., :6], (labels[..., 6:] + 1) // 2]
 
         with autocast():
-            # get loss for each layer as target label
-            if args.head_type == 'deterministic':
-                o = model(
-                    vision_x=images,
-                    lang_x=input_ids,
-                    attention_mask=attention_mask,
-                    # labels=labels,  # loss计算放在外面
-                    vision_gripper=gripper,
-                    state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
-                    with_gripper_logits=True,
-                    return_in_feat=True,
-                    return_aggregate_feature=True,
-                    only_extra_exit=True,
-                )
-                # only need extra exit loss
-                extra_exit_output = o[2]
-                in_features, exit_idx = o[3], o[4]
-                num_actions, bin_gripper, agg_features = extra_exit_output[0], extra_exit_output[1], extra_exit_output[2]
-                bin_actions, bin_logits = bin_gripper
-                if args.multi_step_action != 1:
-                    bs, seq_len = num_actions.shape[:2]
-                    num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
-                    # bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
-                    bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
-                loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0][None], reduction='none').mean(-1)
-                
-                loss_mse = loss_calvin_num.mean()
-                loss_mle = torch.tensor([.0])
-                std = torch.tensor([.0])
-            elif args.head_type == 'gaussian':
-                raise NotImplementedError("Please fix the bug in gaussian policy in single exit before running multi-exit gaussian policy!")
+            with torch.no_grad():
+                # get loss for each layer as target label
+                if args.head_type == 'deterministic':
+                    o = model(
+                        vision_x=images,
+                        lang_x=input_ids,
+                        attention_mask=attention_mask,
+                        # labels=labels,  # loss计算放在外面
+                        vision_gripper=gripper,
+                        state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                        with_gripper_logits=True,
+                        return_in_feat=True,
+                        # return_aggregate_feature=True,
+                        only_extra_exit=True,
+                    )
+                    # only need extra exit loss
+                    extra_exit_output = o[2]
+                    in_features, exit_idx = o[3], o[4]
+                    # num_actions, bin_gripper, agg_features = extra_exit_output[0], extra_exit_output[1], extra_exit_output[2]
+                    num_actions, bin_gripper = extra_exit_output[0], extra_exit_output[1]
+                    bin_actions, bin_logits = bin_gripper
+                    if args.multi_step_action != 1:
+                        bs, seq_len = num_actions.shape[:2]
+                        num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                        # bin_actions = bin_actions.reshape(bs, seq_len, args.multi_step_action, -1)
+                        bin_logits = bin_logits.reshape(bs, seq_len, args.multi_step_action, -1)
+                    loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0], reduction='none').mean(-1)
+                    
+                    loss_mse = loss_calvin_num.mean()
+                    loss_mle = torch.tensor([.0])
+                    std = torch.tensor([.0])
+                elif args.head_type == 'gaussian':
+                    raise NotImplementedError("Please fix the bug in gaussian policy in single exit before running multi-exit gaussian policy!")
 
-            # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
-            bin_targets = labels[1][None].expand(bin_logits.shape[0], -1, -1, -1)
-            loss_calvin_bin = torch.nn.functional.binary_cross_entropy_with_logits(bin_logits, bin_targets, reduction='none').mean(-1)
-            # print(f'{loss_calvin_num.shape=}')
-            
-            # loss for each layer and each sample
-            if args.head_type == 'deterministic':
-                if args.real_data:
-                    loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
-                else:
-                    loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
-            elif args.head_type == 'gaussian':
-                loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
-            loss_calvin *= args.loss_multiplier_calvin
-            # weights = get_exit_weights('uniform', len(all_outputs), device=loss_calvin.device)
-            # weights = weights * weights.shape[0] 
-            # loss_calvin *= weights
-            
-            
-            #### MASK GRADIENTS FOR EMBEDDINGS ####
-            # Note (anas): Do not apply weight decay to embeddings as it will break this function.
-            # def mask_embedding(m):
-            #     if isinstance(m, torch.nn.Embedding) and m.weight.requires_grad and m.weight.grad is not None:
-            #         zero_mask = torch.zeros_like(m.weight.grad)
-            #         zero_mask[media_token_id] = torch.ones_like(zero_mask[media_token_id])
-            #         zero_mask[endofchunk_token_id] = torch.ones_like(
-            #             zero_mask[endofchunk_token_id]
-            #         )
-            #         m.weight.grad = m.weight.grad * zero_mask
-            # model.apply(mask_embedding)
+                # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
+                bin_targets = labels[1]
+                loss_calvin_bin = torch.nn.functional.binary_cross_entropy_with_logits(bin_logits, bin_targets, reduction='none').mean(-1)
+                # print(f'{loss_calvin_num.shape=}')
+                
+                # loss for each layer and each sample
+                if args.head_type == 'deterministic':
+                    if args.real_data:
+                        loss_calvin = loss_calvin_num + loss_calvin_bin * 0.05
+                    else:
+                        loss_calvin = loss_calvin_num + loss_calvin_bin * 0.01
+                elif args.head_type == 'gaussian':
+                    loss_calvin = loss_calvin_num + loss_calvin_bin * args.bin_coef
+                loss_calvin *= args.loss_multiplier_calvin
+                # weights = get_exit_weights('uniform', len(all_outputs), device=loss_calvin.device)
+                # weights = weights * weights.shape[0] 
+                # loss_calvin *= weights
+                
+                
+                #### MASK GRADIENTS FOR EMBEDDINGS ####
+                # Note (anas): Do not apply weight decay to embeddings as it will break this function.
+                # def mask_embedding(m):
+                #     if isinstance(m, torch.nn.Embedding) and m.weight.requires_grad and m.weight.grad is not None:
+                #         zero_mask = torch.zeros_like(m.weight.grad)
+                #         zero_mask[media_token_id] = torch.ones_like(zero_mask[media_token_id])
+                #         zero_mask[endofchunk_token_id] = torch.ones_like(
+                #             zero_mask[endofchunk_token_id]
+                #         )
+                #         m.weight.grad = m.weight.grad * zero_mask
+                # model.apply(mask_embedding)
 
             if epoch == -1:
                 target_value_list.append(loss_calvin.detach())
@@ -3032,24 +3039,24 @@ def train_value_net_one_epoch_calvin_dynamic_exit_debug(
                 # train value net
                 target_values = loss_calvin.detach()
                 if args.discrete:
-                    prev_agg_features = agg_features[:-1].detach()
-                    agg_features = agg_features[1:].detach()
-                    target_values = target_values[1:]
+                    # prev_agg_features = agg_features[:-1].detach()
+                    # agg_features = agg_features[1:].detach()
+                    # target_values = target_values[1:]
+                    # logits = value_net(agg_features, prev_agg_features, exit_idx=exit_idx)
                     
-                    logits = value_net(agg_features, prev_agg_features, exit_idx=exit_idx)
-                    # logits = value_net(features, exit_idx=exit_idx)
+                    logits = value_net(in_features, exit_idx=exit_idx)
                     bin_label = value_to_bin_index(target_values, value_net.module.boundaries)
                     
-                    logits = logits[:, :, 4:]
-                    bin_label = bin_label[:, :, 4:]
-                    # logits = logits[:, 4:].flatten(0, 1)
-                    # bin_label = bin_label[:, 4:].flatten(0, 1)
+                    # logits = logits[:, :, 4:]
+                    # bin_label = bin_label[:, :, 4:]
+                    logits = logits[:, 4:].flatten(0, 1)
+                    bin_label = bin_label[:, 4:].flatten(0, 1)
                     
-                    # loss_value = torch.nn.functional.cross_entropy(logits, bin_label, reduction='none')
+                    loss_value = torch.nn.functional.cross_entropy(logits, bin_label, reduction='none')
                     
                     # loss_value = cumulative_link_loss(logits, bin_label)
                     
-                    loss_value = torch.nn.functional.binary_cross_entropy_with_logits(logits.squeeze(-1), bin_label.float(), reduction='none')
+                    # loss_value = torch.nn.functional.binary_cross_entropy_with_logits(logits, bin_label.float().unsqueeze(-1), reduction='none')
                     
                     # test1
                     # t_label = torch.arange(args.window_size, device=logits.device).unsqueeze(0).expand(args.batch_size_calvin, -1).flatten(0, 1)
@@ -3134,23 +3141,26 @@ def train_value_net_one_epoch_calvin_dynamic_exit_debug(
         torch.distributed.all_gather(target_value_gathered, target_value_list) 
         target_value_gathered = torch.cat(target_value_gathered, dim=0) # (bs , action_seq_len)
         if args.rank == 0:
-            print(f'{target_value_list.shape[1]} samples on device 0, {target_value_gathered.shape[1]} samples on all devices.')
+            # print(f'{target_value_list.shape[1]} samples on device 0, {target_value_gathered.shape[1]} samples on all devices.')
+            print(f'{target_value_list.shape[0]} samples on device 0, {target_value_gathered.shape[0]} samples on all devices.')
         
         # Calculate quantiles to determine bin edges
-        boundaries = get_bin_boundaries(target_value_gathered[:, :, 4:].flatten(0, 2), args.num_bin)
+        # boundaries = get_bin_boundaries(target_value_gathered[:, :, 4:].flatten(0, 2), args.num_bin)
+        boundaries = get_bin_boundaries(target_value_gathered[:, 4:].flatten(0, 1), args.num_bin)
         value_net.module.set_bin_boundaries(boundaries)
         if args.rank == 0:
             print(f'min value: {target_value_gathered.min():.5f}')                                
             print(f'mean value: {target_value_gathered.mean():.5f}')                                
             print(f'median value: {target_value_gathered.median():.5f}')                                
             print(f'max value: {target_value_gathered.max():.5f}')
+            print(f'boundary: ', boundaries)
             
-            import matplotlib.pyplot as plt
-            for t in range(target_value_gathered.shape[2]):
-                data = target_value_gathered[:, :, t].cpu().numpy()
-                plt.hist(data, bins=50, range=(0, 0.07))
-                plt.savefig(f'vis/value_dist_{os.path.basename(args.calvin_dataset)}_{t=}_bin50.jpg')
-                plt.close()
+            # import matplotlib.pyplot as plt
+            # for t in range(target_value_gathered.shape[2]):
+            #     data = target_value_gathered[:, :, t].cpu().numpy()
+            #     plt.hist(data, bins=50, range=(0, 0.07))
+            #     plt.savefig(f'vis/value_dist_{os.path.basename(args.calvin_dataset)}_{t=}_bin50.jpg')
+            #     plt.close()
                 # plot the distribution     
 
 

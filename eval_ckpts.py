@@ -20,7 +20,7 @@ parser.add_argument("--multi_execution", type=int, default=1, help="how many act
 parser.add_argument("--layerwise_exit_eval", action='store_true', default=False) 
 
 parser.add_argument("--eval_exit_mode", type=str, default='last', choices=['last', 'all', 'dynamic']) # only eval the last exit / all exits / dynamic early-exit mechanism
-parser.add_argument("--value_type", type=str, default='loss', choices=['loss', 'sim', 'time']) # only eval the last exit / all exits / dynamic early-exit mechanism
+parser.add_argument("--value_type", type=str, default='loss', choices=['loss', 'sim', 'time', 'random']) # only eval the last exit / all exits / dynamic early-exit mechanism
 
 
 # Parse the arguments
@@ -145,7 +145,7 @@ for ckpt_name in ckpt_names:
             print("ckpt doesn't exist, skipped.")
             continue
         if args.value_net_ckpt_dir:
-            value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_discrete_b20_4.pth')
+            value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_mlp_b20_1.pth')
         else:
             value_net_ckpt_path = 'None'
         log_dir = f'log_{args.ckpt_dir}'
@@ -164,9 +164,10 @@ for ckpt_name in ckpt_names:
             prefix += f'_{args.multi_execution}_execution'
             
         if args.eval_exit_mode != 'dynamic' or args.value_type != 'loss':
-            log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
+            # log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
+            log_file = '{}/{}_{}.log'.format(log_dir, prefix, ckpt_name[:-30])
         else:
-            log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(os.path.basename(value_net_ckpt_path).split('.')[:-1]))
+            log_file = '{}/{}_{}.log'.format(log_dir, prefix, os.path.basename(value_net_ckpt_path)[:30])
         if os.path.exists(log_file): 
             print(f'skip {log_file}')
             continue

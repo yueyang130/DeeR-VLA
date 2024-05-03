@@ -20,7 +20,8 @@ from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp, check_loaded_parameters
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-from models.value_net import LSTMValueHead, ExitController, DiffValueHead, SimValueNet, TimeValueNet
+from models.value_net import LSTMValueHead, ExitController, MLPValueHead, DiffValueHead, SimValueNet, TimeValueNet, RandomValueNet
+
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed)
@@ -569,6 +570,20 @@ def main():
             readout_args(args, value_net_ckpt, "num_bin", 100)
             
             num_exit = model.get_exit_num()
+            
+            
+            value_net = MLPValueHead(
+                in_features=model.lm_head.in_features, 
+                window_size=args.eval_hist_size,
+                hidden_size=model.lm_head.hidden_size,
+                fusion_mode=args.fusion_mode, 
+                use_state=args.use_state, 
+                pooling=args.pooling,
+                with_exit_embed=args.with_exit_embed,
+                num_exits=model.get_exit_num(),
+                discrete=args.discrete,
+                num_bin=args.num_bin,
+            )
             # value_net = LSTMValueHead(
             #     in_features=model.lm_head.in_features, 
             #     window_size=args.eval_hist_size,
@@ -582,18 +597,18 @@ def main():
             #     discrete=args.discrete,
             #     num_bin=args.num_bin,   
             # )
-            value_net = DiffValueHead(
-            in_features=1024, 
-            window_size=args.eval_hist_size,
-            dropout=0.0,
-            hidden_size=model.lm_head.hidden_size,
-            with_exit_embed=args.with_exit_embed,
-            # with_time_embed=args.with_time_embed,
-            with_time_embed=False,
-            num_exits=model.get_exit_num(),
-            discrete=args.discrete,
-            num_bin=args.num_bin,
-            )
+            # value_net = DiffValueHead(
+            # in_features=1024, 
+            # window_size=args.eval_hist_size,
+            # dropout=0.0,
+            # hidden_size=model.lm_head.hidden_size,
+            # with_exit_embed=args.with_exit_embed,
+            # # with_time_embed=args.with_time_embed,
+            # with_time_embed=False,
+            # num_exits=model.get_exit_num(),
+            # discrete=args.discrete,
+            # num_bin=args.num_bin,
+            # )
             
             value_net_ckpt_dict = {k.replace('module.', ''): v for k, v in value_net_ckpt["model_state_dict"].items()} # remove ddp prefix
             value_net_ckpt_dict = {k.replace('value_net.', 'head.'): v for k, v in value_net_ckpt_dict.items()} # Be compatible with previous value_net code
@@ -606,7 +621,10 @@ def main():
             exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=False)
             # exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=True)
         elif args.value_type == 'time':
-            value_net = TimeValueNet(T=180, exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx())
+            value_net = TimeValueNet(T=100, exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx())
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx())
+        elif args.value_type == 'random':
+            value_net = RandomValueNet(exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx())
             exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx())
         else:
             raise NotImplementedError

@@ -57,6 +57,7 @@ class MPTFlamingo(nn.Module):
         refresh=-1,
         early_exit_layer=-1,
         multi_exit=False,
+        share_exit=False,
         exit_interval=1,
         exit_dropout=0.0,
         lstm_dropout=0.0,
@@ -201,65 +202,73 @@ class MPTFlamingo(nn.Module):
         self.early_exit_layer = early_exit_layer
 
         self.lang_encoder._delete_decoder_layers(list(range(early_exit_layer+1, lang_encoder.config.n_layers)))
-
+        
+        
+        def get_encoder():
+            if decoder_type == 'lstm':
+                if head_type == 'deterministic':
+                    lm_head = DeterministicDecoder(in_features, self.window_size, exit_dropout, lstm_dropout, dropout_mode, mlp_layernorm, lstm_layernorm, mlp_num_hidden_layers, lstm_num_layers=lstm_num_layers,
+                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
+                elif head_type == 'gaussian':
+                    lm_head = GaussianDecoder(in_features, self.window_size, exit_dropout,
+                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
+                        tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
+            elif decoder_type == 'fc':
+                if use_hist:
+                    lm_head = FCDecoder(in_features, self.window_size, 
+                    use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action)
+                elif 'vit_concat' in fusion_mode:
+                    lm_head = FCDecoder(in_features, self.window_size, 
+                    use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action)
+                else:
+                    raise NotImplementedError
+            elif decoder_type == 'diffusion':
+                if use_diff:
+                    lm_head = DiffusionDecoder(
+                        self.action_head.hidden_size, 
+                        self.window_size,
+                        input_dim=self.action_head.out_features+1,
+                        n_timesteps=n_timesteps,
+                        horizon=diff_horizon,
+                        predict_epsilon=predict_epsilon,
+                    )
+                else:
+                    raise NotImplementedError
+            elif decoder_type=='gpt':
+                lm_head = GPTDecoder(in_features, self.window_size, use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, multi_step_action=multi_step_action, pooling=pooling, hidden_size=hidden_size)
+            else:
+                raise NotImplementedError
+            return lm_head
+        
         # multi-exit
         self.lm_exits = {}
         if multi_exit:
             print("Enable multi-exit!")
             
-            def get_encoder():
-                if decoder_type == 'lstm':
-                    if head_type == 'deterministic':
-                        lm_head = DeterministicDecoder(in_features, self.window_size, exit_dropout, lstm_dropout, dropout_mode, mlp_layernorm, lstm_layernorm, mlp_num_hidden_layers, lstm_num_layers=lstm_num_layers,
-                            use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
-                    elif head_type == 'gaussian':
-                        lm_head = GaussianDecoder(in_features, self.window_size, exit_dropout,
-                            use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
-                            tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
-                elif decoder_type == 'fc':
-                    if use_hist:
-                        lm_head = FCDecoder(in_features, self.window_size, 
-                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action)
-                    elif 'vit_concat' in fusion_mode:
-                        lm_head = FCDecoder(in_features, self.window_size, 
-                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action)
-                    else:
-                        raise NotImplementedError
-                elif decoder_type == 'diffusion':
-                    if use_diff:
-                        lm_head = DiffusionDecoder(
-                            self.action_head.hidden_size, 
-                            self.window_size,
-                            input_dim=self.action_head.out_features+1,
-                            n_timesteps=n_timesteps,
-                            horizon=diff_horizon,
-                            predict_epsilon=predict_epsilon,
-                        )
-                    else:
-                        raise NotImplementedError
-                elif decoder_type=='gpt':
-                    lm_head = GPTDecoder(in_features, self.window_size, use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, multi_step_action=multi_step_action, pooling=pooling, hidden_size=hidden_size)
-                else:
-                    raise NotImplementedError
-                return lm_head
-                
             for i in range(exit_interval-1, early_exit_layer, exit_interval):
-                self.lm_exits[i] = get_encoder()
+                if share_exit:
+                    self.lm_exits[i] = self.lm_head
+                else:
+                    self.lm_exits[i] = get_encoder()
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
-            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one internal exit!')     
-
+            print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one internal exit!')  
+            
         # extra one exit
         self.use_extra_exit = use_extra_exit
         self.detach_extra_exit = detach_extra_exit
         self.layerwise_exit_eval = layerwise_exit_eval
 
         if use_extra_exit:
-            self.extra_exit = get_encoder()
+            if share_exit:
+                self.extra_exit = self.lm_head
+            else:
+                self.extra_exit = get_encoder()
         
             if not self.layerwise_exit_eval:
                 print('eval the extra exit!') 
             else:
-                print('eval layerwise exits!') 
+                print('eval layerwise exits!')    
+
         
     def get_all_exit_idx(self):
         # not include the extra exit
@@ -482,40 +491,40 @@ class MPTFlamingo(nn.Module):
             
             rand_layer_indices = rand_layer_indices.expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
             rand_layer_feat = torch.gather(all_feats, 2, rand_layer_indices).squeeze(2)     
-            if not only_extra_exit:
-                # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
-                rand_layer_feat = rand_layer_feat.flatten(0, 1)
-                # cut off gradient. Loss is used only for training the extra exit, not the backbone.
-                extra_exit_output = get_action(self.extra_exit, 
-                                               rand_layer_feat.detach() if self.detach_extra_exit else rand_layer_feat,
-                                               state_tensor)
+            # if not only_extra_exit:
+            # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
+            rand_layer_feat = rand_layer_feat.flatten(0, 1)
+            # cut off gradient. Loss is used only for training the extra exit, not the backbone.
+            extra_exit_output = get_action(self.extra_exit, 
+                                            rand_layer_feat.detach() if self.detach_extra_exit else rand_layer_feat,
+                                            state_tensor)
                 # extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
-            else:
-                # we only get the predicted values at the t timestep with input feature from all layers.
-                all_layer_feat = []
-                for t in range(self.window_size):
-                    all_layer_feat_t = []
-                    for i in range(len(self.lm_exits)+1):
-                        rand_layer_feat_i = rand_layer_feat # (bs, action_seq_len, lang_len, d)
-                        rand_layer_feat_i[:, t] = all_feats[:, t, i] # (bs, action_seq_len, n_exit, lang_len, d)
-                        all_layer_feat_t.append(rand_layer_feat_i)
-                    all_layer_feat.append(torch.stack(all_layer_feat_t, dim=0))  # (n_exit, bs, action_seq_len, lang_len, d)
-                rand_layer_feat = torch.stack(all_layer_feat, dim=0)  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
+            # else:
+            #     # we only get the predicted values at the t timestep with input feature from all layers.
+            #     all_layer_feat = []
+            #     for t in range(self.window_size):
+            #         all_layer_feat_t = []
+            #         for i in range(len(self.lm_exits)+1):
+            #             rand_layer_feat_i = rand_layer_feat # (bs, action_seq_len, lang_len, d)
+            #             rand_layer_feat_i[:, t] = all_feats[:, t, i] # (bs, action_seq_len, n_exit, lang_len, d)
+            #             all_layer_feat_t.append(rand_layer_feat_i)
+            #         all_layer_feat.append(torch.stack(all_layer_feat_t, dim=0))  # (n_exit, bs, action_seq_len, lang_len, d)
+            #     rand_layer_feat = torch.stack(all_layer_feat, dim=0)  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
                 
-                # input_feat = rand_layer_feat.flatten(2, 3).flatten(0, 1).detach()
-                input_feat = rand_layer_feat.flatten(2, 3).flatten(0, 1)
-                extra_exit_output = get_action(self.extra_exit, input_feat, state_tensor, return_aggregate_feature=return_aggregate_feature) # (action_seq_len * exits * bs, seq_len)
+            #     # input_feat = rand_layer_feat.flatten(2, 3).flatten(0, 1).detach()
+            #     input_feat = rand_layer_feat.flatten(2, 3).flatten(0, 1)
+            #     extra_exit_output = get_action(self.extra_exit, input_feat, state_tensor, return_aggregate_feature=return_aggregate_feature) # (action_seq_len * exits * bs, seq_len)
                 
-                def get_output(x):
-                    x = x.reshape(action_seq_len, len(self.lm_exits)+1, bs, action_seq_len, -1)
-                    x = [x[i, :, :, i:i+1]  for i in range(action_seq_len)] # action_seq_len * (exit_num, bs, 1)
-                    x = torch.cat(x, dim=2) #  (exit_num, bs, action_seq_len)
-                    return x
-                extra_exit_output = (
-                    get_output(extra_exit_output[0]), 
-                    (get_output(extra_exit_output[1][0]),  get_output(extra_exit_output[1][1])),
-                    get_output(extra_exit_output[2]), 
-                )
+                # def get_output(x):
+                #     x = x.reshape(action_seq_len, len(self.lm_exits)+1, bs, action_seq_len, -1)
+                #     x = [x[i, :, :, i:i+1]  for i in range(action_seq_len)] # action_seq_len * (exit_num, bs, 1)
+                #     x = torch.cat(x, dim=2) #  (exit_num, bs, action_seq_len)
+                #     return x
+                # extra_exit_output = (
+                #     get_output(extra_exit_output[0]), 
+                #     (get_output(extra_exit_output[1][0]),  get_output(extra_exit_output[1][1])),
+                #     get_output(extra_exit_output[2]), 
+                # )
             
             if return_in_feat:
                 return output, exit_outputs, extra_exit_output, rand_layer_feat, rand_layer_indices[:, :, 0, 0, 0]

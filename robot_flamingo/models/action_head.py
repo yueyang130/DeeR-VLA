@@ -263,45 +263,18 @@ class MLPNohHeadLight(torch.nn.Module):
 class MLPNohHead(torch.nn.Module):
     def __init__(self, hidden_size, output_size, dropout, layernorm):
         super().__init__()
-        if layernorm:
-            self.mlp = torch.nn.Sequential(
-                torch.nn.Dropout(dropout), 
-                torch.nn.Linear(hidden_size, 1024),
-                nn.LayerNorm(1024) if layernorm else nn.Identity(),
-                torch.nn.ReLU(),
-                torch.nn.Dropout(dropout), 
-                torch.nn.Linear(1024, 512),
-                nn.LayerNorm(512) if layernorm else nn.Identity(),
-                torch.nn.ReLU(),
-                torch.nn.Dropout(dropout), 
-                torch.nn.Linear(512, 256),
-                nn.LayerNorm(256) if layernorm else nn.Identity(),
-                torch.nn.ReLU(),
-                torch.nn.Linear(256, output_size)
-            )            
-        elif dropout > 0:
-            self.mlp = torch.nn.Sequential(
-                torch.nn.Dropout(dropout), 
-                torch.nn.Linear(hidden_size, 1024),
-                torch.nn.ReLU(),
-                torch.nn.Dropout(dropout), 
-                torch.nn.Linear(1024, 512),
-                torch.nn.ReLU(),
-                torch.nn.Dropout(dropout), 
-                torch.nn.Linear(512, 256),
-                torch.nn.ReLU(),
-                torch.nn.Linear(256, output_size)
-            )
-        else:
-            self.mlp = torch.nn.Sequential(
-                torch.nn.Linear(hidden_size, 1024),
-                torch.nn.ReLU(),
-                torch.nn.Linear(1024, 512),
-                torch.nn.ReLU(),
-                torch.nn.Linear(512, 256),
-                torch.nn.ReLU(),
-                torch.nn.Linear(256, output_size)
-            )         
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Dropout(dropout), 
+            torch.nn.Linear(hidden_size, 1024),
+            nn.LayerNorm(1024) if layernorm else nn.Identity(),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(dropout), 
+            torch.nn.Linear(1024, 512),
+            nn.LayerNorm(512) if layernorm else nn.Identity(),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(dropout), 
+            torch.nn.Linear(512, output_size),
+        )            
 
     def forward(self, x):
         return self.mlp(x)
@@ -755,7 +728,7 @@ class DeterministicDecoder(ActionDecoder):
         if (not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase)) \
             or isinstance(self.rnn, LayerNormLSTM):
             # print('history len:',self.history_len)
-            if input_feature.shape[1] == 1:  # the first frame of an action sequence
+            if input_feature.shape[1] == 1:  # inference, only input current frame
                 self.history_memory.append(input_feature)
                 if len(self.history_memory) <= self.history_len:
                     # print('cur hist_mem len: {}'.format(len(self.history_memory)))

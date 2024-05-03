@@ -314,7 +314,7 @@ def main():
         help="Floating point precision.",
     )
     # for training value net
-    parser.add_argument("--value_dropout", type=float, default=0.0, help='')
+    parser.add_argument("--value_net_type", type=str, default='mlp', choices=['mlp', 'lstm', 'diffmlp'])
     parser.add_argument("--value_weight_decay", type=float, default=0.0, )
     parser.add_argument("--with_exit_embed", default=False, action="store_true")
     parser.add_argument("--with_time_embed", default=False, action="store_true")
@@ -418,11 +418,18 @@ def main():
     readout_args(args, checkpoint, 'tanh_squash_dist', False)
     readout_args(args, checkpoint, 'state_dependent_std', False)
     readout_args(args, checkpoint, 'early_exit_layer', -1)
-    # readout_args(args, checkpoint, "precision", 'fp32')
+    readout_args(args, checkpoint, "precision", 'fp32')
     readout_args(args, checkpoint, "multi_exit", False)
     readout_args(args, checkpoint, "use_extra_exit", False)
     readout_args(args, checkpoint, "exit_interval", 1)
     readout_args(args, checkpoint, "exit_dropout", 0.0)
+    readout_args(args, checkpoint, "lstm_dropout", 0.0)
+    readout_args(args, checkpoint, "dropout_mode", "wo_last")
+    readout_args(args, checkpoint, "mlp_layernorm", False)
+    readout_args(args, checkpoint, "lstm_layernorm", False)
+    readout_args(args, checkpoint, "mlp_num_hidden_layers", 3)
+    readout_args(args, checkpoint, "lstm_num_layers", 4)
+    readout_args(args, checkpoint, "pooling", 'max')
     
     model, image_processor, tokenizer = create_model_and_transforms(
         args.vision_encoder_path,
@@ -466,7 +473,14 @@ def main():
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
+        lstm_dropout=args.lstm_dropout,
+        dropout_mode=args.dropout_mode,
+        mlp_layernorm=args.mlp_layernorm,
+        lstm_layernorm=args.lstm_layernorm,
+        mlp_num_hidden_layers=args.mlp_num_hidden_layers,
+        lstm_num_layers=args.lstm_num_layers,
         use_extra_exit=args.use_extra_exit,
+        # detach_extra_exit=args.detach_extra_exit,
     )
 
     checkpoint_path = args.openflamingo_checkpoint
@@ -491,23 +505,22 @@ def main():
             name=args.run_name,
             config=vars(args),
         )
-    # value_net = MLPValueHead(
-    #     in_features=model.lm_head.in_features, 
-    #     window_size=args.eval_hist_size,
-    #     dropout=args.value_dropout,
-    #     hidden_size=model.lm_head.hidden_size,
-    #     fusion_mode=args.fusion_mode, 
-    #     use_state=args.use_state, 
-    #     pooling=args.pooling,
-    #     with_exit_embed=args.with_exit_embed,
-    #     num_exits=model.get_exit_num(),
-    #     discrete=args.discrete,
-    #     num_bin=args.num_bin,
-    #     )
+    if args.value_net_type == 'mlp':
+        value_net = MLPValueHead(
+            in_features=model.lm_head.in_features, 
+            window_size=args.eval_hist_size,
+            hidden_size=model.lm_head.hidden_size,
+            fusion_mode=args.fusion_mode, 
+            use_state=args.use_state, 
+            pooling=args.pooling,
+            with_exit_embed=args.with_exit_embed,
+            num_exits=model.get_exit_num(),
+            discrete=args.discrete,
+            num_bin=args.num_bin,
+            )
     # value_net = LSTMValueHead(
     #     in_features=model.lm_head.in_features, 
     #     window_size=args.eval_hist_size,
-    #     dropout=args.value_dropout,
     #     hidden_size=model.lm_head.hidden_size,
     #     fusion_mode=args.fusion_mode, 
     #     use_state=args.use_state, 
@@ -517,18 +530,22 @@ def main():
     #     num_exits=model.get_exit_num(),
     #     discrete=args.discrete,
     #     num_bin=args.num_bin,
+    # #     )
+    # value_net = DiffValueHead(
+    #     in_features=1024, 
+    #     window_size=args.eval_hist_size,
+    #     hidden_size=model.lm_head.hidden_size,
+    #     with_exit_embed=args.with_exit_embed,
+    #     with_time_embed=args.with_time_embed,
+    #     num_exits=model.get_exit_num(),
+    #     discrete=args.discrete,
+    #     num_bin=args.num_bin,
     #     )
-    value_net = DiffValueHead(
-        in_features=1024, 
-        window_size=args.eval_hist_size,
-        dropout=args.value_dropout,
-        hidden_size=model.lm_head.hidden_size,
-        with_exit_embed=args.with_exit_embed,
-        with_time_embed=args.with_time_embed,
-        num_exits=model.get_exit_num(),
-        discrete=args.discrete,
-        num_bin=args.num_bin,
-        )
+    else:
+        raise NotImplementedError
+    
+    if args.rank == 0:
+        print(value_net)
 
     device_id = args.rank % torch.cuda.device_count()
     if args.precision == "bf16" or args.precision == "amp_bfloat16" or args.precision == "amp_bf16":
@@ -568,61 +585,59 @@ def main():
 
     args.learning_rate = args.learning_rate * args.batch_size_calvin / 6 # adaptive lr
     
-    
-    
-    def get_model_grouped_params(model):
-        param_groups = {}
+    # def get_model_grouped_params(model):
+    #     param_groups = {}
 
-        def apply_decay(x):
-            # if not args.exit_decay:
-            if False:
-                apply_decay_bool = "gated_cross_attn_layer" in x
-            else:
-                apply_decay_bool = ("gated_cross_attn_layer" in x) or ('lm_head' in x) or ('lm_exit_modules' in x) or ('extra_exit' in x)
-            return (
-                apply_decay_bool
-                and "ff_gate" not in x
-                and "attn_gate" not in x
-                and "norm" not in x
-                and "bias" not in x
-            )
+    #     def apply_decay(x):
+    #         # if not args.exit_decay:
+    #         if False:
+    #             apply_decay_bool = "gated_cross_attn_layer" in x
+    #         else:
+    #             apply_decay_bool = ("gated_cross_attn_layer" in x) or ('lm_head' in x) or ('lm_exit_modules' in x) or ('extra_exit' in x)
+    #         return (
+    #             apply_decay_bool
+    #             and "ff_gate" not in x
+    #             and "attn_gate" not in x
+    #             and "norm" not in x
+    #             and "bias" not in x
+    #         )
 
-        def apply_lr_scale(n, p):
-            if 'lm_head' in n or 'lm_exit_modules' in n or 'extra_exit' in n:
-                lr_scale = args.exit_lr_scale
-            else:
-                lr_scale = 1.0
+    #     def apply_lr_scale(n, p):
+    #         if 'lm_head' in n or 'lm_exit_modules' in n or 'extra_exit' in n:
+    #             lr_scale = args.exit_lr_scale
+    #         else:
+    #             lr_scale = 1.0
 
-            if lr_scale not in param_groups:
-                param_groups[lr_scale] = []
+    #         if lr_scale not in param_groups:
+    #             param_groups[lr_scale] = []
 
-            param_groups[lr_scale].append((n, p))
+    #         param_groups[lr_scale].append((n, p))
 
-        # set lr_scale
-        for n, p in model.named_parameters():
-            apply_lr_scale(n, p)
-        # set weight decay
-        grouped_params = []
-        for lr_scale, params in param_groups.items():
-            params_with_wd, params_without_wd = [], []
-            for n, p in params:
-                if apply_decay(n):
-                    params_with_wd.append(p)
-                else:
-                    params_without_wd.append(p)
-            # Optimizer also support specifying per-parameter options. To do this, instead of passing an iterable of Variable s, pass in an iterable of dict s.
-            #! Each of them will define a separate parameter group, and should contain a params key, containing a list of parameters belonging to it. 
-            #! Other keys should match the keyword arguments accepted by the optimizers, and will be used as optimization options for this group.
-            # Adamw doesn't natively support per-parameter-group learning rate scaling through the "lr_scale" key in the parameter group dictionary.
-            # Unless update lr by lr_scale manually.
-            # grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": args.weight_decay})
-            # grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": 0.0})
+    #     # set lr_scale
+    #     for n, p in model.named_parameters():
+    #         apply_lr_scale(n, p)
+    #     # set weight decay
+    #     grouped_params = []
+    #     for lr_scale, params in param_groups.items():
+    #         params_with_wd, params_without_wd = [], []
+    #         for n, p in params:
+    #             if apply_decay(n):
+    #                 params_with_wd.append(p)
+    #             else:
+    #                 params_without_wd.append(p)
+    #         # Optimizer also support specifying per-parameter options. To do this, instead of passing an iterable of Variable s, pass in an iterable of dict s.
+    #         #! Each of them will define a separate parameter group, and should contain a params key, containing a list of parameters belonging to it. 
+    #         #! Other keys should match the keyword arguments accepted by the optimizers, and will be used as optimization options for this group.
+    #         # Adamw doesn't natively support per-parameter-group learning rate scaling through the "lr_scale" key in the parameter group dictionary.
+    #         # Unless update lr by lr_scale manually.
+    #         # grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": args.weight_decay})
+    #         # grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr_scale": lr_scale, "weight_decay": 0.0})
 
-            lr = args.learning_rate * lr_scale  # Calculate the learning rate for this group
-            grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
-            grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
+    #         lr = args.learning_rate * lr_scale  # Calculate the learning rate for this group
+    #         grouped_params.append({"params": [p for p in params_with_wd if p.requires_grad], "lr": lr, "weight_decay": args.weight_decay})
+    #         grouped_params.append({"params": [p for p in params_without_wd if p.requires_grad], "lr": lr, "weight_decay": 0.0})
 
-        return grouped_params
+    #     return grouped_params
     
     def get_value_net_grouped_params(value_net):
      
@@ -633,7 +648,8 @@ def main():
         }]
         
 
-    grouped_params = get_model_grouped_params(ddp_model) + get_value_net_grouped_params(ddp_value_net)
+    # grouped_params = get_model_grouped_params(ddp_model) + get_value_net_grouped_params(ddp_value_net)
+    grouped_params = get_value_net_grouped_params(ddp_value_net)
     optimizer = torch.optim.AdamW(grouped_params, lr=args.learning_rate)
 
     total_training_steps = (
