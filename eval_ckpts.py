@@ -131,6 +131,11 @@ ckpt_names = [
     # 'strategy=post_4+5_exit_layer_11_multi-exit_ascending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
     'fix_index_strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_nodetach_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_7.pth',
     # 'fix_index_strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_7.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_5.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_4.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_6.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_8.pth',
 ]
 
 print(ckpt_names)
@@ -150,7 +155,7 @@ for ckpt_name in ckpt_names:
             value_net_ckpt_path = 'None'
         log_dir = f'log_{args.ckpt_dir}'
         os.makedirs(log_dir, exist_ok=True)
-        prefix = f'evaluate_{args.value_type}'
+        prefix = f'evaluate'
         if args.layerwise_exit_eval:
             prefix += '_per_exit'
         if args.amp:
@@ -158,6 +163,7 @@ for ckpt_name in ckpt_names:
         prefix += f'_{args.eval_exit_mode}'
         if args.eval_exit_mode == 'dynamic':
             print(f'eval exit ratio = {r}')
+            prefix += f'_{args.value_type}'
             prefix += f'_{r}'
         prefix += '_exit'
         if args.multi_execution > 1:
@@ -165,9 +171,9 @@ for ckpt_name in ckpt_names:
             
         if args.eval_exit_mode != 'dynamic' or args.value_type != 'loss':
             # log_file = '{}/{}_{}.log'.format(log_dir, prefix, '.'.join(ckpt_name.split('.')[:-1]))
-            log_file = '{}/{}_{}.log'.format(log_dir, prefix, ckpt_name[:-30])
+            log_file = '{}/{}_{}.log'.format(log_dir, prefix, ckpt_name[:-30]+ckpt_name[-5])
         else:
-            log_file = '{}/{}_{}.log'.format(log_dir, prefix, os.path.basename(value_net_ckpt_path)[:30])
+            log_file = '{}/{}_{}.log'.format(log_dir, prefix, os.path.basename(value_net_ckpt_path)[:30]+os.path.basename(value_net_ckpt_path)[-2:])
         if os.path.exists(log_file): 
             print(f'skip {log_file}')
             continue

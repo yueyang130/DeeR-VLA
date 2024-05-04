@@ -352,6 +352,10 @@ def main():
     parser.add_argument("--use_extra_exit", action="store_true", default=False)
     parser.add_argument("--share_exit", action="store_true", default=False)
     parser.add_argument("--detach_extra_exit", type=int, default=1)
+    parser.add_argument("--regularize_extra_exit", action="store_true", default=False)
+    parser.add_argument("--use_layerwise_projection", action="store_true", default=False)
+    parser.add_argument("--num_projection_layers", type=int, default=1)
+    parser.add_argument("--skip_connection", action="store_true", default=False)
     parser.add_argument("--feat_distill_coef", type=float, default=0.0, help='use feature distillation if coef is greater than 0')
     # for value net
     # parser.add_argument("--with_value_net", action="store_true", default=False, help='jointly train value net')
@@ -441,6 +445,9 @@ def main():
         use_extra_exit=args.use_extra_exit,
         detach_extra_exit=args.detach_extra_exit,
         share_exit=args.share_exit,
+        use_layerwise_projection=args.use_layerwise_projection,
+        num_projection_layers=args.num_projection_layers,
+        skip_connection=args.skip_connection,
     )
     
     if args.early_exit_layer < 0:

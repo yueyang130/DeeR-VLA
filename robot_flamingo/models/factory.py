@@ -297,6 +297,10 @@ def create_model_and_transforms(
         print(
             f"One Action head with {sum(p.numel() for p in model.lm_head.parameters())/1e6:.2f}M parameters"
         )
+        if hasattr(model, 'extra_exit'):
+            print(
+                f"Extra Action head with {sum(p.numel() for p in model.extra_exit.parameters())/1e6:.2f}M parameters"
+            )
 
         print(
             f"Flamingo model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)/1e6:.2f}M trainable parameters"

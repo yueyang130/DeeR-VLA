@@ -11,6 +11,7 @@ import shutil
 from fvcore.nn import FlopCountAnalysis
 from thop import profile
 from contextlib import suppress
+import random
 
 class MPTFlamingo(nn.Module):
     def __init__(
@@ -70,6 +71,9 @@ class MPTFlamingo(nn.Module):
         lstm_layernorm=False,
         mlp_num_hidden_layers=3,
         lstm_num_layers=4,
+        use_layerwise_projection=False,
+        num_projection_layers : int = 1,
+        skip_connection=False,
     ):
         """
         Args:
@@ -152,7 +156,8 @@ class MPTFlamingo(nn.Module):
             print(f'{head_type=}')
             if head_type == 'deterministic':
                 lm_head = DeterministicDecoder(in_features, self.window_size, exit_dropout, lstm_dropout, dropout_mode, mlp_layernorm, lstm_layernorm, mlp_num_hidden_layers, lstm_num_layers=lstm_num_layers,
-                    use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
+                    use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
+                    )
             elif head_type == 'gaussian':
                 lm_head = GaussianDecoder(in_features, self.window_size, exit_dropout,
                     use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
@@ -204,11 +209,12 @@ class MPTFlamingo(nn.Module):
         self.lang_encoder._delete_decoder_layers(list(range(early_exit_layer+1, lang_encoder.config.n_layers)))
         
         
-        def get_encoder():
+        def get_encoder(is_extra_exit, exit_list=None):
             if decoder_type == 'lstm':
                 if head_type == 'deterministic':
                     lm_head = DeterministicDecoder(in_features, self.window_size, exit_dropout, lstm_dropout, dropout_mode, mlp_layernorm, lstm_layernorm, mlp_num_hidden_layers, lstm_num_layers=lstm_num_layers,
-                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling)
+                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
+                        is_extra_exit=is_extra_exit, use_layerwise_projection=use_layerwise_projection, num_projection_layers=num_projection_layers, skip_connection=skip_connection, exit_list=exit_list)
                 elif head_type == 'gaussian':
                     lm_head = GaussianDecoder(in_features, self.window_size, exit_dropout,
                         use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
@@ -249,7 +255,7 @@ class MPTFlamingo(nn.Module):
                 if share_exit:
                     self.lm_exits[i] = self.lm_head
                 else:
-                    self.lm_exits[i] = get_encoder()
+                    self.lm_exits[i] = get_encoder(is_extra_exit=False)
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
             print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one internal exit!')  
             
@@ -262,7 +268,7 @@ class MPTFlamingo(nn.Module):
             if share_exit:
                 self.extra_exit = self.lm_head
             else:
-                self.extra_exit = get_encoder()
+                self.extra_exit = get_encoder(is_extra_exit=True, exit_list=self.get_all_exit_idx())
         
             if not self.layerwise_exit_eval:
                 print('eval the extra exit!') 
@@ -421,7 +427,7 @@ class MPTFlamingo(nn.Module):
             torch.cuda.synchronize()
             print(f"LLM total time: {cur_time-time.time():.4f} seconds")
         
-        def get_action(head, in_feat, in_state, return_aggregate_feature=False, eval_flop=False):
+        def get_action(head, in_feat, in_state, return_aggregate_feature=False, eval_flop=False, layer_indices=None):
             
             if eval_flop:
                 vis_per_flop = profile(head, inputs=(in_feat, in_state, return_feature, return_aggregate_feature, with_gripper_logits))[0]
@@ -434,7 +440,7 @@ class MPTFlamingo(nn.Module):
             if isinstance(head, GaussianDecoder):
                 o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits, act=act, deterministic=deterministic)
             else:
-                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits)
+                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits, layer_indices=layer_indices)
             
             if eval_time:
                 torch.cuda.synchronize()
@@ -478,26 +484,47 @@ class MPTFlamingo(nn.Module):
             
         
         if self.use_extra_exit:
-            # use features from varying layers as LSTM input
             all_feats = torch.stack(output.hidden_states, dim=1) # (bs * action_seq_len, n_exit, lang_len, d)
             # (bs * action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, n_exit, lang_len, d)
             all_feats = all_feats.reshape(-1, self.window_size, *all_feats.shape[1:]) 
             # (bs, action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, lang_len, d)
             bs, action_seq_len, _ = all_feats.shape[:3]
-            # rand_layer_indices = torch.randint(0, n_exit, size=(bs, action_seq_len, 1, 1, 1), device=all_feats.device)
             exit_ids = self.get_all_exit_idx()
-            indices = torch.randint(0, self.get_exit_num(), size=(bs, action_seq_len), device=all_feats.device)
-            rand_layer_indices = torch.tensor([exit_ids[idx] for idx in indices.reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len, 1, 1, 1)
+            exit_num = self.get_exit_num()
             
-            rand_layer_indices = rand_layer_indices.expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
+            # use features from random layers as LSTM input
+            # rand_layer_indices = torch.randint(0, n_exit, size=(bs, action_seq_len, 1, 1, 1), device=all_feats.device)
+            indices = torch.randint(0, exit_num, size=(bs, action_seq_len), device=all_feats.device)
+            in_indices1 = rand_layer_indices = torch.tensor([exit_ids[idx] for idx in indices.reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len)
+            
+            rand_layer_indices = rand_layer_indices.reshape(bs, action_seq_len, 1, 1, 1).expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
             rand_layer_feat = torch.gather(all_feats, 2, rand_layer_indices).squeeze(2)     
             # if not only_extra_exit:
             # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
             rand_layer_feat = rand_layer_feat.flatten(0, 1)
-            # cut off gradient. Loss is used only for training the extra exit, not the backbone.
             extra_exit_output = get_action(self.extra_exit, 
                                             rand_layer_feat.detach() if self.detach_extra_exit else rand_layer_feat,
-                                            state_tensor)
+                                            state_tensor, 
+                                            layer_indices=in_indices1
+                                            )
+            
+            # use features from two layers as LSTM input
+            prev_len = random.randint(1, action_seq_len)
+            indices = torch.randint(0, exit_num, size=(bs, 2), device=all_feats.device)
+            indices_list = [indices[:, 0] for _ in range(prev_len)] + [indices[:, 1] for _ in range(action_seq_len-prev_len)]
+            in_indices2 = indices = torch.tensor([exit_ids[idx] for idx in torch.stack(indices_list, dim=1).reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len)
+            indices = indices.reshape(bs, action_seq_len, 1, 1, 1).expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
+            two_layer_feat = torch.gather(all_feats, 2, indices).squeeze(2)     
+            # if not only_extra_exit:
+            # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
+            two_layer_feat = two_layer_feat.flatten(0, 1)
+            extra_exit_output2 = get_action(self.extra_exit, 
+                                            two_layer_feat.detach() if self.detach_extra_exit else two_layer_feat,
+                                            state_tensor,
+                                            layer_indices=in_indices2
+                                            )
+            
+            
                 # extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
             # else:
             #     # we only get the predicted values at the t timestep with input feature from all layers.
@@ -529,7 +556,7 @@ class MPTFlamingo(nn.Module):
             if return_in_feat:
                 return output, exit_outputs, extra_exit_output, rand_layer_feat, rand_layer_indices[:, :, 0, 0, 0]
             else:
-                return output, exit_outputs, extra_exit_output
+                return output, exit_outputs, extra_exit_output, extra_exit_output2
         else:
             if len(self.lm_exits) > 0:
                 return output, exit_outputs            

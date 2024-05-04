@@ -547,7 +547,7 @@ class TimeValueNet(BaseValueNet):
     Total computation increases with larger alpha.
     """
     
-    def __init__(self, T, exit_ratio, exit_list) -> None:
+    def __init__(self, T, exit_ratio, exit_list, steps_per_stage) -> None:
         super().__init__()
         self.T = T
         self.exit_list = exit_list
@@ -576,7 +576,7 @@ class RandomValueNet(BaseValueNet):
     Total computation increases with larger alpha.
     """
     
-    def __init__(self, exit_ratio, exit_list, max_step=361) -> None:
+    def __init__(self, exit_ratio, exit_list, steps_per_stage, max_step=361) -> None:
         super().__init__()
         self.exit_list = exit_list
         self.max_step = max_step
@@ -584,9 +584,9 @@ class RandomValueNet(BaseValueNet):
         probs = exit_ratio ** torch.arange(1, len(exit_list)+1) # n (including the last exit)
         probs /= probs.sum()
         # self.ratios = np.array(probs)
-        self.ratios = np.array([0, 0, 0, 0.5, 0.5, 0])   
+        self.ratios = np.array([0, 0, 0.5, 0.5, 0, 0])   
         
-        self.repeat_step = int(exit_ratio)
+        self.repeat_step = int(steps_per_stage)
         print(f'{self.repeat_step=}')
         
         
@@ -595,16 +595,16 @@ class RandomValueNet(BaseValueNet):
         if t == 0:
             # step-wise random
             self.t_exit_dict =  {}
-            for t in range(self.max_step):
-                if t % self.repeat_step == 0:
-                    exit_id = int(np.random.choice(self.exit_list, p=self.ratios))
-                self.t_exit_dict[t] = exit_id
+            # for t in range(self.max_step):
+            #     if t % self.repeat_step == 0:
+            #         exit_id = int(np.random.choice(self.exit_list, p=self.ratios))
+            #     self.t_exit_dict[t] = exit_id
 
             # task-wise random
-            # exit_id = int(np.random.choice(self.exit_list, p=self.ratios))
-            # self.t_exit_dict = {
-            #     t : exit_id for t in range(self.max_step)
-            # }  
+            exit_id = int(np.random.choice(self.exit_list, p=self.ratios))
+            self.t_exit_dict = {
+                t : exit_id for t in range(self.max_step)
+            }  
             
             # print('rank: ', torch.distributed.get_rank(), self.t_exit_dict)
         
@@ -613,13 +613,14 @@ class RandomValueNet(BaseValueNet):
             
         
 class ExitController(torch.nn.Module):
-    def __init__(self, value_net, exit_id_list, leq=True):
+    def __init__(self, value_net, exit_id_list, steps_per_stage, leq=True):
         super().__init__()
         self.value_net = value_net
         self.thresholds = None
         self.leq = leq
         self.exit_id_list = exit_id_list
         self.num_exit = len(self.exit_id_list)
+        self.steps_per_stage = steps_per_stage
         # for debug
         # self.history_values = [[] for i in range(num_exit)]
         
@@ -700,6 +701,7 @@ class ExitController(torch.nn.Module):
         return pred_value_gathered
     
     def set_timestep(self, t):
+        self.cur_step = t
         if isinstance(self.value_net, TimeValueNet) or isinstance(self.value_net, RandomValueNet):
             self.value_net.set_timestep(t)
 
@@ -710,8 +712,16 @@ class ExitController(torch.nn.Module):
         if i not in self.exit_id_list:
             return False
         
+        # if still in a stage just use previous exit id
+        if self.cur_step % self.steps_per_stage != 0:
+            return i >= self.cur_exit_id
+        
+        # else set a new exit id
         if isinstance(self.value_net, TimeValueNet) or isinstance(self.value_net, RandomValueNet):
-            return self.value_net(i)
+            exit_flag = self.value_net(i)
+            if exit_flag:
+                self.cur_exit_id = i
+            return exit_flag
         
         if isinstance(self.value_net, MLPValueHead):
             value = self.value_net(x[i], return_value=True)
@@ -733,6 +743,7 @@ class ExitController(torch.nn.Module):
             if isinstance(self.value_net, LSTMValueHead):
                 # Already find the dynamic exit. We need to update hidden state
                 self.value_net.update_memory()
+            self.cur_exit_id = i
             return True 
         else:
             return False

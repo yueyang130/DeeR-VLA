@@ -333,6 +333,7 @@ def main():
     parser.add_argument("--value_type", type=str, default='loss') # loss / sim 
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
     parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
+    parser.add_argument("--steps_per_stage", default=64, type=int)
     parser.add_argument("--load_threshold", default=1, type=int)
     
     args = parser.parse_args()
@@ -614,18 +615,18 @@ def main():
             value_net_ckpt_dict = {k.replace('value_net.', 'head.'): v for k, v in value_net_ckpt_dict.items()} # Be compatible with previous value_net code
             value_net.load_state_dict(value_net_ckpt_dict, True)
             
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=True)
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=True)
         
         elif args.value_type == 'sim':
             value_net = SimValueNet(pooling=False, exit_ids=model.get_all_exit_idx(), interval=args.exit_interval)
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=False)
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=False)
             # exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=True)
         elif args.value_type == 'time':
-            value_net = TimeValueNet(T=100, exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx())
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx())
+            value_net = TimeValueNet(T=100, exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
         elif args.value_type == 'random':
-            value_net = RandomValueNet(exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx())
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx())
+            value_net = RandomValueNet(exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
         else:
             raise NotImplementedError
             

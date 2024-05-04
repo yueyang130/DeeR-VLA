@@ -54,6 +54,9 @@ def save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, step, extra_optim
         "lstm_layernorm": args.lstm_layernorm,
         "mlp_num_hidden_layers": args.mlp_num_hidden_layers,
         "lstm_num_layers": args.lstm_num_layers,
+        "use_layerwise_projection": args.use_layerwise_projection,
+        "num_projection_layers": args.num_projection_layers,
+        "skip_connection": args.skip_connection,
         "pooling": args.pooling,
         "precision": args.precision,
         "model_state_dict": get_checkpoint(ddp_model),
@@ -119,7 +122,7 @@ def get_ckpt_prefix(args, train_value=False):
     ckpt_name = args.wandb_note + '_' if args.wandb_note else ''
     
     if hasattr(args, 'exit_strategy'):
-        ckpt_name += 'strategy={}_'.format(args.exit_strategy)
+        ckpt_name += 'stg={}_'.format(args.exit_strategy)
         if args.exit_strategy == 'joint':
             ckpt_name += 'frq={}_'.format(args.llm_update_freq)
         if args.exit_strategy == 'pre':
@@ -130,34 +133,40 @@ def get_ckpt_prefix(args, train_value=False):
     #     ckpt_name += '{}_checkpoint_gripper_{}_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.fusion_mode, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
     # else:
     #     ckpt_name += '{}_checkpoint_no_gripper_hist_{}_{}_exit_layer_{}_'.format(args.precision, args.hist_window, '' if not args.sep_resampler else 'sep_', args.early_exit_layer)
-    ckpt_name += 'exit_layer_{}_'.format(args.early_exit_layer)
+    ckpt_name += 'layer_{}_'.format(args.early_exit_layer)
     if args.multi_exit:
-        ckpt_name += 'multi-exit_'
+        ckpt_name += 'multie_'
         if args.share_exit:
             ckpt_name += 'share_'
         if args.exit_weight != 'uniform':
             ckpt_name += f'{args.exit_weight}_'
-        ckpt_name += 'interval={}_'.format(args.exit_interval)
+        ckpt_name += 'intv={}_'.format(args.exit_interval)
     if args.layer_decay != 1.0:
         ckpt_name += 'layerdecay={}_'.format(args.layer_decay)
     if args.feat_distill_coef > 0:
         ckpt_name += 'distill={}_'.format(args.feat_distill_coef)
     if args.use_extra_exit:
-        ckpt_name += 'extra-exit_'
+        ckpt_name += 'extrae_'
         if not args.detach_extra_exit:
-            ckpt_name += 'nodetach_'
-    if args.mlp_num_hidden_layers != 3:
-        ckpt_name += 'mlp{}L_'.format(args.mlp_num_hidden_layers)
-    if args.mlp_layernorm:
-        ckpt_name += 'mlpln_'
-    if args.lstm_num_layers != 4:
-        ckpt_name += 'lstm{}L_'.format(args.lstm_num_layers)
-    if args.lstm_layernorm:
-        ckpt_name += 'lstmln_'
-    if args.exit_dropout != 0:
-        ckpt_name += 'mlpdrp={}_{}_'.format(args.exit_dropout, args.dropout_mode)    
-    if args.lstm_dropout != 0:
-        ckpt_name += 'lstmdrp={}_'.format(args.lstm_dropout)
+            ckpt_name += 'nodth_'
+        if args.regularize_extra_exit:
+            ckpt_name += 'reg_'
+        if args.use_layerwise_projection:
+            ckpt_name += f'lwproj{args.num_projection_layers}L_'
+            if args.skip_connection:
+                ckpt_name += 'res_'
+    # if args.mlp_num_hidden_layers != 2:
+    #     ckpt_name += 'mlp{}L_'.format(args.mlp_num_hidden_layers)
+    # if args.mlp_layernorm:
+    #     ckpt_name += 'mlpln_'
+    # if args.lstm_num_layers != 4:
+    #     ckpt_name += 'lstm{}L_'.format(args.lstm_num_layers)
+    # if args.lstm_layernorm:
+    #     ckpt_name += 'lstmln_'
+    # if args.exit_dropout != 0:
+    #     ckpt_name += 'mlpdrp={}_{}_'.format(args.exit_dropout, args.dropout_mode)    
+    # if args.lstm_dropout != 0:
+    #     ckpt_name += 'lstmdrp={}_'.format(args.lstm_dropout)
     if args.exit_decay:
         ckpt_name += 'decay_'
     if args.data_percent < 1.0:
@@ -213,13 +222,13 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'tcp_'
     if args.decoder_type != 'lstm':
         ckpt_name += '{}_{}_'.format(args.decoder_type, args.hidden_size)
-    ckpt_name += 'jointlr_{:.6f}_'.format(args.joint_learning_rate) 
-    if args.joint_lr_scheduler != 'constant':
-        ckpt_name += '{}_'.format(args.joint_lr_scheduler) 
-    if args.exit_lr_scale != 1.0:
-        ckpt_name += 'exitscale={}_'.format(args.exit_lr_scale) 
-    if args.exit_lr_scheduler != 'constant':
-        ckpt_name += 'exitlr_{}_'.format(args.exit_lr_scheduler)  
+    # ckpt_name += 'jointlr_{:.6f}_'.format(args.joint_learning_rate) 
+    # if args.joint_lr_scheduler != 'constant':
+    #     ckpt_name += '{}_'.format(args.joint_lr_scheduler) 
+    # if args.exit_lr_scale != 1.0:
+    #     ckpt_name += 'exitscale={}_'.format(args.exit_lr_scale) 
+    # if args.exit_lr_scheduler != 'constant':
+    #     ckpt_name += 'exitlr_{}_'.format(args.exit_lr_scheduler)  
     
     return ckpt_name
 
@@ -282,7 +291,7 @@ def get_exit_weights(weight_mode, num, use_extra_exit, device):
         weight = torch.arange(1, num+1, dtype=torch.float32, device=device) # 1,2,3,4,..,N, placehold
     elif weight_mode == 'descending':
         weight = torch.arange(num-1, -1, step=-1, dtype=torch.float32, device=device) # N,...,2,1, placehold
-        
+    
         
     if use_extra_exit:
         weight[:-1] = weight[:-1] / weight[:-1].mean()
@@ -988,9 +997,12 @@ def train_one_epoch_calvin_multi_exit(
                 )
                 
                 if args.use_extra_exit:
-                    final_output, exit_outputs, extra_exit_output = o[0], o[1], o[2]
+                    final_output, exit_outputs, extra_exit_output, extra_exit_output2 = o[0], o[1], o[2], o[3]
                     # features, exit_idx = o[3], o[4]
                     all_outputs = exit_outputs + [final_output.logits] + [extra_exit_output]
+                    if args.regularize_extra_exit:
+                        all_outputs.append(extra_exit_output2)
+                    
                 else:
                     final_output, exit_outputs = o[0], o[1]
                     # get joint outputs
@@ -1098,15 +1110,25 @@ def train_one_epoch_calvin_multi_exit(
             
         #### LOG #####
         if args.use_extra_exit:
-            loss_calvin_bin_list = loss_calvin_bin[:-1].mean(dim=tuple(range(1, dim)))
-            loss_calvin_num_list = loss_calvin_num[:-1].mean(dim=tuple(range(1, dim)))
-            extra_exit_loss_bin = loss_calvin_bin[-1].mean()
-            extra_exit_loss_num = loss_calvin_num[-1].mean()
+            if args.regularize_extra_exit:
+                loss_calvin_bin_list = loss_calvin_bin[:-2].mean(dim=tuple(range(1, dim)))
+                loss_calvin_num_list = loss_calvin_num[:-2].mean(dim=tuple(range(1, dim)))
+                extra_exit_loss_bin = loss_calvin_bin[-2].mean()
+                extra_exit_loss_num = loss_calvin_num[-2].mean()
+                extra_exit_loss2_bin = loss_calvin_bin[-1].mean()
+                extra_exit_loss2_num = loss_calvin_num[-1].mean()
+            else:
+                loss_calvin_bin_list = loss_calvin_bin[:-1].mean(dim=tuple(range(1, dim)))
+                loss_calvin_num_list = loss_calvin_num[:-1].mean(dim=tuple(range(1, dim)))
+                extra_exit_loss_bin = loss_calvin_bin[-1].mean()
+                extra_exit_loss_num = loss_calvin_num[-1].mean()
+                extra_exit_loss2_bin = torch.tensor([.0])
+                extra_exit_loss2_num =  torch.tensor([.0])
         else:
             loss_calvin_bin_list = loss_calvin_bin.mean(dim=tuple(range(1, dim)))
             loss_calvin_num_list = loss_calvin_num.mean(dim=tuple(range(1, dim)))
-            extra_exit_loss_bin = torch.tensor([.0])
-            extra_exit_loss_num = torch.tensor([.0])
+            extra_exit_loss_bin = extra_exit_loss2_bin = torch.tensor([.0])
+            extra_exit_loss_num = extra_exit_loss2_num =  torch.tensor([.0])
         
             
         mv_avg_loss.append(loss.item())
@@ -1188,6 +1210,8 @@ def train_one_epoch_calvin_multi_exit(
                         # **{f"feat_sim_{i}": x.item() for i, x in enumerate(sim)},
                         "extra_exit_loss_bin": extra_exit_loss_bin.item(),
                         "extra_exit_loss_num": extra_exit_loss_num.item(),
+                        "extra_exit_loss2_bin": extra_exit_loss2_bin.item(),
+                        "extra_exit_loss2_num": extra_exit_loss2_num.item(),
                         "mse": loss_mse.item(),
                         "mle": loss_mle.item(),
                         "mean_std": std.mean().item(),
@@ -2506,7 +2530,6 @@ def train_value_net_one_epoch_calvin_multi_exit(
                 # weights = get_exit_weights('uniform', len(all_outputs), device=loss_calvin.device)
                 # weights = weights * weights.shape[0] 
                 # loss_calvin *= weights
-                
                 
                 #### MASK GRADIENTS FOR EMBEDDINGS ####
                 # Note (anas): Do not apply weight decay to embeddings as it will break this function.

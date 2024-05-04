@@ -482,7 +482,39 @@ class ActionDecoder(nn.Module):
 
     def clear_hidden_state(self) -> None:
         pass
-
+    
+    
+class LayerwiseProjection(nn.Module):
+    def __init__(self, in_features, hidden_dim, num_layers, dropout, layernorm, exit_id_list, skip_connection) -> None:
+        super().__init__()
+        
+        self.skip_connection = skip_connection
+        if num_layers == 1:
+            self.projection = nn.Sequential(
+                            torch.nn.Dropout(dropout), 
+                            torch.nn.Linear(in_features, in_features),
+                                    )
+        elif num_layers == 2:
+            self.projection = nn.Sequential(
+                            torch.nn.Dropout(dropout), 
+                            torch.nn.Linear(in_features, hidden_dim),
+                            nn.GELU(),
+                            torch.nn.Dropout(dropout), 
+                            torch.nn.Linear(hidden_dim, in_features),
+                                    )
+        else:
+            raise NotImplementedError
+        self.layernorm = nn.LayerNorm(in_features) if layernorm else nn.Identity()
+        
+        
+    def forward(self, x):
+        if self.skip_connection:
+            x = self.projection(x) + x
+        else:
+            x = self.projection(x)
+            
+        x = self.layernorm(x)
+        return x
 
 class FCDecoder(ActionDecoder):
     def __init__(
@@ -589,7 +621,6 @@ class DeterministicDecoder(ActionDecoder):
         history_len = None,
         out_features: int = 6,
         hidden_size: int = 1024,
-        num_projection_layers : int = 2,
         lstm_num_layers: int = 4, # move two layers to projection
         use_diff=False,
         last_action=False,
@@ -598,6 +629,11 @@ class DeterministicDecoder(ActionDecoder):
         multi_step_action=1,
         return_feature=False,
         pooling='max',
+        is_extra_exit=False,
+        use_layerwise_projection=False,
+        num_projection_layers : int = 1,
+        skip_connection=False,
+        exit_list=None,
     ):
         super(DeterministicDecoder, self).__init__()
         self.fc_state = None
@@ -619,6 +655,7 @@ class DeterministicDecoder(ActionDecoder):
             in_features *= 2
         self.return_feature = return_feature
         self.in_features = in_features
+        self.hidden_size = hidden_size
         self.out_features = out_features
         self.window_size = window_size
         self.multi_step_action = multi_step_action
@@ -627,21 +664,17 @@ class DeterministicDecoder(ActionDecoder):
         self.history_len = history_len
         self.history_memory = []
         
-        # self.projection = [nn.Sequential(
-        #     nn.Linear(in_features, hidden_size),
-        #     nn.LayerNorm(hidden_size) if layernorm else nn.Identity(),
-        #     nn.ReLU(inplace=True)
-        # )]
-        # self.projection.extend([
-        #     nn.Sequential(
-        #         nn.Linear(hidden_size, hidden_size),
-        #         nn.LayerNorm(hidden_size) if layernorm else nn.Identity(),
-        #         nn.ReLU(inplace=True)
-        #     )
-        #     for _ in range(num_projection_layers - 1)
-        # ])
-        # self.projection = nn.Sequential(*self.projection)
+        # layerwise projection
+        self.is_extra_exit = is_extra_exit
+        self.use_layerwise_projection = use_layerwise_projection
+        self.skip_connection = skip_connection
+        self.num_projection_layers = num_projection_layers
         
+        if self.is_extra_exit and self.use_layerwise_projection:
+            self.layerwise_projection_dict = nn.ModuleDict({
+                str(exit_list[i]): LayerwiseProjection(in_features, hidden_size, num_projection_layers, policy_rnn_dropout_p, lstm_layernorm, exit_list, skip_connection) 
+                for i in range(len(exit_list))
+            })
         
         self.rnn = lstm_decoder
         self.rnn = self.rnn(in_features, hidden_size, lstm_num_layers, policy_rnn_dropout_p, lstm_layernorm)
@@ -679,6 +712,7 @@ class DeterministicDecoder(ActionDecoder):
         return_feature=False,
         return_aggregate_feature=False,
         with_gripper_logits=False,
+        layer_indices=None,
     ):
         self.return_feature = return_feature
         if input_feature.dim() == 4:
@@ -701,10 +735,39 @@ class DeterministicDecoder(ActionDecoder):
                 input_feature = torch.cat([rgb_feat, gripper_feat], dim=-1)
             else:
                 input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (bs * seq_len, d) maxpooling along lang_seq
-        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (bs, seq_len, d)
         
-        # project
-        # input_feature = self.projection(input_feature)
+        
+        if self.is_extra_exit and self.use_layerwise_projection:
+            if not isinstance(layer_indices, int):
+                assert (layer_indices.ndim == 1 or layer_indices.ndim == 2) and input_feature.ndim == 2
+                layer_indices = layer_indices.view(-1)
+                assert layer_indices.shape[0] == input_feature.shape[0]
+                
+                # Output tensor initialized to zeros
+                output_features = torch.zeros_like(input_feature)
+
+                # Iterate over each unique index in layer_indices
+                unique_indices = layer_indices.unique()
+                for index in unique_indices:
+                    mask = (layer_indices == index)
+                    in_mask = mask.unsqueeze(-1).expand_as(input_feature)
+                    out_mask = mask.unsqueeze(-1).expand_as(output_features)
+                    selected_features = input_feature[in_mask].view(-1, input_feature.size(1))
+                    
+                    # Get the corresponding layerwise projection
+                    projection = self.layerwise_projection_dict[str(index.item())]
+                    projected_features = projection(selected_features)
+
+                    # Place the projected features back in the output tensor
+                    output_features[out_mask] = projected_features.view_as(output_features[out_mask])
+                    
+                input_feature = output_features
+                
+            else:
+            # inference
+                input_feature = self.layerwise_projection_dict[str(layer_indices)](input_feature)
+        
+        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (bs, seq_len, d)
         
         if self.return_feature:
             # org_feat = copy.deepcopy(input_feature)
@@ -712,18 +775,19 @@ class DeterministicDecoder(ActionDecoder):
             if org_feat.dim() == 2 or org_feat.dim() == 3 and org_feat.shape[1] == 1:
                 org_feat = org_feat.view(self.window_size, org_feat.shape[-1])
 
-        if state_tensor is not None and self.use_state:
-            arm_state = state_tensor[..., :6] # b,len,state_dim-1
-            arm_state_embeddings = self.embed_arm_state(arm_state)
-            arm_state_embeddings = arm_state_embeddings.view(-1, self.window_size, arm_state_embeddings.shape[-1]) # b,len,h
-            gripper_state = ((state_tensor[..., -1]+1.0) / 2).long() # b,len,1
-            gripper_state_embeddings = self.embed_gripper_state(gripper_state)
-            gripper_state_embeddings = gripper_state_embeddings.view(-1, self.window_size, gripper_state_embeddings.shape[-1]) # b,len,h
-            state_embeddings = torch.cat((arm_state_embeddings, gripper_state_embeddings), dim=2) # b,len,2h
-            state_embeddings = self.embed_state(state_embeddings) # b,len,h
+        # if state_tensor is not None and self.use_state:
+        #     arm_state = state_tensor[..., :6] # b,len,state_dim-1
+        #     arm_state_embeddings = self.embed_arm_state(arm_state)
+        #     arm_state_embeddings = arm_state_embeddings.view(-1, self.window_size, arm_state_embeddings.shape[-1]) # b,len,h
+        #     gripper_state = ((state_tensor[..., -1]+1.0) / 2).long() # b,len,1
+        #     gripper_state_embeddings = self.embed_gripper_state(gripper_state)
+        #     gripper_state_embeddings = gripper_state_embeddings.view(-1, self.window_size, gripper_state_embeddings.shape[-1]) # b,len,h
+        #     state_embeddings = torch.cat((arm_state_embeddings, gripper_state_embeddings), dim=2) # b,len,2h
+        #     state_embeddings = self.embed_state(state_embeddings) # b,len,h
 
-            # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
-            input_feature = input_feature + state_embeddings
+        #     # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
+        #     input_feature = input_feature + state_embeddings
+        
         
         if (not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase)) \
             or isinstance(self.rnn, LayerNormLSTM):
