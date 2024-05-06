@@ -713,6 +713,7 @@ class DeterministicDecoder(ActionDecoder):
         return_aggregate_feature=False,
         with_gripper_logits=False,
         layer_indices=None,
+        # update_hidden_state=True,
     ):
         self.return_feature = return_feature
         if input_feature.dim() == 4:
@@ -791,27 +792,40 @@ class DeterministicDecoder(ActionDecoder):
         
         if (not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase)) \
             or isinstance(self.rnn, LayerNormLSTM):
-            # print('history len:',self.history_len)
             if input_feature.shape[1] == 1:  # inference, only input current frame
                 self.history_memory.append(input_feature)
-                if len(self.history_memory) <= self.history_len:
-                    # print('cur hist_mem len: {}'.format(len(self.history_memory)))
-                    x, h_n = self.rnn(input_feature, self.hidden_state)
-                    self.hidden_state = h_n
-                    x = x[:, -1].unsqueeze(1)
-                    self.rnn_out = x.squeeze(1)
-                else:
-                    # the hidden state need to be refreshed based on the history window
-                    # print('hist_mem exceeded, refresh hidden state')
-                    cur_len = len(self.history_memory)
-                    for _ in range(cur_len - self.history_len):
-                        self.history_memory.pop(0)
-                    assert len(self.history_memory) == self.history_len
-                    hist_feature = torch.cat(self.history_memory, dim=1)
-                    self.hidden_state = None
-                    x, h_n = self.rnn(hist_feature, self.hidden_state)
-                    x = x[:, -1].unsqueeze(1)
-                    self.rnn_out = x.squeeze(1)
+                # print('history mem len:', len(self.history_memory))
+                
+                
+                # if len(self.history_memory) <= self.history_len:  # timesteps less than wondow size
+                    
+                x, h_n = self.rnn(input_feature, self.hidden_state)
+                self.hidden_state = h_n
+                x = x[:, -1].unsqueeze(1)
+                self.rnn_out = x.squeeze(1)
+                # print(f'{x=}')
+                # print(f'{self.actions(x)=}')
+                # print(f'{self.gripper(x)=}')
+                    
+                # else:
+                # timesteps greater than window size
+                # the hidden state need to be refreshed based on the history window
+                # print('hist_mem exceeded, refresh hidden state')
+                # if len(self.history_memory) > self.history_len:
+                #     cur_len = len(self.history_memory)
+                #     for _ in range(cur_len - self.history_len):
+                #         self.history_memory.pop(0)
+                #     assert len(self.history_memory) == self.history_len
+                # hist_feature = torch.cat(self.history_memory, dim=1)
+                # x2, h_n2 = self.rnn(hist_feature, None)
+                # x2 = x2[:, -1].unsqueeze(1)
+                # x = x2
+                # print(f'{x2=}')
+                # print(f'{self.actions(x2)=}')
+                # print(f'{self.gripper(x2)=}')
+                # print(f'{x2=}')
+                # print(f'{h_n2[0]=}')
+                
             else:
                 # print('input feature lenght > 1', input_feature.shape)
                 self.hidden_state = h_0
@@ -837,15 +851,15 @@ class DeterministicDecoder(ActionDecoder):
         else:
             return actions, gripper
 
-    def act(
-        self,
-        input_feature: torch.Tensor,
-    ) -> torch.Tensor:
-        pred_actions, self.hidden_state = self(
-            input_feature, self.hidden_state
-        )
+    # def act(
+    #     self,
+    #     input_feature: torch.Tensor,
+    # ) -> torch.Tensor:
+    #     pred_actions, self.hidden_state = self(
+    #         input_feature, self.hidden_state
+    #     )
 
-        return pred_actions
+    #     return pred_actions
 
 
 class GaussianDecoder(ActionDecoder):

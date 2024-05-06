@@ -333,7 +333,7 @@ def main():
     parser.add_argument("--value_type", type=str, default='loss') # loss / sim 
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
     parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
-    parser.add_argument("--steps_per_stage", default=64, type=int)
+    parser.add_argument("--steps_per_stage", default=1, type=int)
     parser.add_argument("--load_threshold", default=1, type=int)
     
     args = parser.parse_args()
@@ -463,6 +463,9 @@ def main():
     readout_args(args, checkpoint, "mlp_num_hidden_layers", 3)
     readout_args(args, checkpoint, "lstm_num_layers", 4)
     readout_args(args, checkpoint, "pooling", 'max')
+    readout_args(args, checkpoint, "use_layerwise_projection", False)
+    readout_args(args, checkpoint, "num_projection_layers", 1)
+    readout_args(args, checkpoint, "skip_connection", False)
     if 'layernorm' in checkpoint: # for compatibility with old code
         args.mlp_layernorm = checkpoint['layernorm']
     
@@ -517,6 +520,9 @@ def main():
         lstm_num_layers=args.lstm_num_layers,
         mlp_num_hidden_layers=args.mlp_num_hidden_layers,
         use_extra_exit=args.use_extra_exit,
+        use_layerwise_projection=args.use_layerwise_projection,
+        num_projection_layers=args.num_projection_layers,
+        skip_connection=args.skip_connection,
         layerwise_exit_eval=args.layerwise_exit_eval,
     )
     checkpoint_path = args.openflamingo_checkpoint
@@ -622,7 +628,7 @@ def main():
             exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=False)
             # exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=True)
         elif args.value_type == 'time':
-            value_net = TimeValueNet(T=100, exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
+            value_net = TimeValueNet(T=360, exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
             exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
         elif args.value_type == 'random':
             value_net = RandomValueNet(exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)

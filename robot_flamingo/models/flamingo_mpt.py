@@ -425,13 +425,13 @@ class MPTFlamingo(nn.Module):
 
         if eval_time:
             torch.cuda.synchronize()
-            print(f"LLM total time: {cur_time-time.time():.4f} seconds")
+            print(f"LLM total time: {time.time()-cur_time:.4f} seconds")
         
         def get_action(head, in_feat, in_state, return_aggregate_feature=False, eval_flop=False, layer_indices=None):
             
             if eval_flop:
-                vis_per_flop = profile(head, inputs=(in_feat, in_state, return_feature, return_aggregate_feature, with_gripper_logits))[0]
-                print(f'thop action head flops = {vis_per_flop/1e9:.1f}G, ')
+                vis_per_flop = profile(head, inputs=(in_feat, in_state, return_feature, return_aggregate_feature, with_gripper_logits, layer_indices))[0]
+                print(f'thop action head flops = {vis_per_flop/1e9:.2f}G, ')
             
             if eval_time:
                 torch.cuda.synchronize()
@@ -444,7 +444,7 @@ class MPTFlamingo(nn.Module):
             
             if eval_time:
                 torch.cuda.synchronize()
-                print(f"action head time: {cur_time-time.time():.4f} seconds")
+                print(f"action head time: {time.time()-cur_time:.4f} seconds")
                 cur_time = time.time()
             return o
         
@@ -466,7 +466,7 @@ class MPTFlamingo(nn.Module):
                 else:
                     exit_head = self.lm_exits[exit_id]
             assert len(output.hidden_states) == exit_id + 1
-            exit_action_output = get_action(exit_head, output.hidden_states[exit_id], state_tensor)
+            exit_action_output = get_action(exit_head, output.hidden_states[exit_id], state_tensor, layer_indices=exit_id)
             output.logits = exit_action_output
             return output
         

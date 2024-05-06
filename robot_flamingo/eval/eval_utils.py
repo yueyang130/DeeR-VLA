@@ -46,8 +46,8 @@ import pyrender
 logger = logging.getLogger(__name__)
 
 EP_LEN = 360
-# NUM_SEQUENCES = 1000
-NUM_SEQUENCES = 56
+NUM_SEQUENCES = 224
+# NUM_SEQUENCES = 56
 
 # EP_LEN = 100
 # NUM_SEQUENCES = 8

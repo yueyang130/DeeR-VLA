@@ -541,6 +541,67 @@ class SimValueNet(BaseValueNet):
             return sim
         
 
+        
+class ActionValueNet(BaseValueNet):
+    def __init__(self, pooling, exit_ids, interval, exit_head) -> None:
+        super().__init__()
+        self.pooling = pooling
+        self.interval = interval
+        self.exit_ids = exit_ids
+        self.exit_head = exit_head
+        
+        
+        print('Settings for SimValueNet:')
+        print(f'{self.pooling=}')
+        print(f'{self.interval=}')
+        
+    def forward(  # type: ignore
+        self,
+        feats: torch.Tensor,
+        i=None,
+        mode='infer',
+        ):
+        
+        if mode == 'infer':
+            assert i > 0, 'the first layer similarity is not implemented yet'
+            if i > 0 and i - self.interval < 0:
+                prev_i = 0
+            else:
+                prev_i = i - self.interval
+                
+            if self.pooling:
+                prev_feats = torch.max(feats[prev_i], dim=-2)[0] # (n_exit, bs * action_seq_len, d)
+                last_feats = torch.max(feats[i], dim=-2)[0]
+                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len)
+            else:
+                sim = get_similarity(feats[i], feats[prev_i], detach_f1=True) # (n_exit, bs * action_seq_len, lang_len)
+                sim = sim.mean(dim=-1)    
+                
+            return sim
+        else:
+            last_feats = torch.stack([feats[i] for i in self.exit_ids], dim=0) # (n_exit, bs * action_seq_len, lang_len, d)
+            
+            prev_feats = torch.zeros_like(last_feats)
+            for i, exit_id in enumerate(self.exit_ids):
+                if exit_id - self.interval >= 0:
+                    prev_feats[i] = feats[exit_id-self.interval]
+                elif exit_id > 0:
+                    prev_feats[i] = feats[0]
+                else:
+                    raise NotImplementedError
+            
+            if self.pooling:
+                prev_feats = torch.max(prev_feats, dim=-2)[0] # (n_exit, bs * action_seq_len, d)
+                last_feats = torch.max(last_feats, dim=-2)[0]
+                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len)
+            else:
+                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len, lang_len)
+                sim = sim.mean(dim=-1)
+        
+            return sim
+
+        
+
 class TimeValueNet(BaseValueNet):
     """
     Increasing computation as timestep goes in a subtask.
@@ -551,7 +612,7 @@ class TimeValueNet(BaseValueNet):
         super().__init__()
         self.T = T
         self.exit_list = exit_list
-        self.max_exit = exit_list[-2]
+        self.max_exit = exit_list[-1]
         
         probs = exit_ratio ** torch.arange(1, len(exit_list)+1) # n (including the last exit)
         probs /= probs.sum()
@@ -582,9 +643,9 @@ class RandomValueNet(BaseValueNet):
         self.max_step = max_step
         
         probs = exit_ratio ** torch.arange(1, len(exit_list)+1) # n (including the last exit)
-        probs /= probs.sum()
         # self.ratios = np.array(probs)
-        self.ratios = np.array([0, 0, 0.5, 0.5, 0, 0])   
+        self.ratios = np.array([1, 1, 1, 1, 1, 1])   
+        self.ratios =  self.ratios /  self.ratios.sum()
         
         self.repeat_step = int(steps_per_stage)
         print(f'{self.repeat_step=}')
@@ -595,16 +656,16 @@ class RandomValueNet(BaseValueNet):
         if t == 0:
             # step-wise random
             self.t_exit_dict =  {}
-            # for t in range(self.max_step):
-            #     if t % self.repeat_step == 0:
-            #         exit_id = int(np.random.choice(self.exit_list, p=self.ratios))
-            #     self.t_exit_dict[t] = exit_id
+            for t in range(self.max_step):
+                if t % self.repeat_step == 0:
+                    exit_id = int(np.random.choice(self.exit_list, p=self.ratios))
+                self.t_exit_dict[t] = exit_id
 
             # task-wise random
-            exit_id = int(np.random.choice(self.exit_list, p=self.ratios))
-            self.t_exit_dict = {
-                t : exit_id for t in range(self.max_step)
-            }  
+            # exit_id = int(np.random.choice(self.exit_list, p=self.ratios))
+            # self.t_exit_dict = {
+            #     t : exit_id for t in range(self.max_step)
+            # }  
             
             # print('rank: ', torch.distributed.get_rank(), self.t_exit_dict)
         
@@ -830,7 +891,7 @@ def generate_sim_values(
        
         with torch.cuda.amp.autocast(enabled=args.amp), torch.no_grad():
             if args.head_type == 'deterministic':
-                final_output, exit_outputs, extra_exit_output = model(
+                final_output, exit_outputs, extra_exit_output, extra_exit_output2 = model(
                     vision_x=images,
                     lang_x=input_ids,
                     attention_mask=attention_mask,

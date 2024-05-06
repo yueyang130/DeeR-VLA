@@ -128,14 +128,16 @@ ckpt_names = [
     # 'strategy=post_4+5_exit_layer_11_multi-exit_descending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     # 'strategy=post_4+5_exit_layer_11_multi-exit_descending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
     # 'strategy=post_4+5_exit_layer_11_multi-exit_ascending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
-    # 'strategy=post_4+5_exit_layer_11_multi-exit_ascending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
-    'fix_index_strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_nodetach_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_7.pth',
     # 'fix_index_strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_7.pth',
-    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_7.pth',
-    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_5.pth',
-    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_4.pth',
-    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_6.pth',
-    # 'strategy=post_4+5_exit_layer_11_multi-exit_interval=2_extra-exit_nodetach_reg_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_8.pth',
+    # 'strategy=post_4+5_exit_layer_11_multi-exit_ascending_interval=2_extra-exit_mlp2L_mlpln_lstmln_lr_scale=0.25_mlpdrp=0.4_layerwise_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_8.pth',
+    # 'fix_index_strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_7.pth',
+    # 'fix_index_strategy=post_4+5_exit_layer_11_multi-exit_uniform_interval=2_extra-exit_nodetach_mlp2L_mlpln_lstmln_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_jointlr_0.000067_exitscale=0.25_7.pth',
+    # 'stg=post_4+5_layer_23_multie_intv=2_extrae_nodth_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_lwproj1L_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_lwproj2L_res_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_lwproj1L_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_lwproj2L_res_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
 ]
 
 print(ckpt_names)
@@ -153,7 +155,7 @@ for ckpt_name in ckpt_names:
             value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_mlp_b20_1.pth')
         else:
             value_net_ckpt_path = 'None'
-        log_dir = f'log_{args.ckpt_dir}'
+        log_dir = f'log224_{args.ckpt_dir}'
         os.makedirs(log_dir, exist_ok=True)
         prefix = f'evaluate'
         if args.layerwise_exit_eval:
