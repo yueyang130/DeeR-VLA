@@ -83,7 +83,7 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --layerwise_exit_eval ${layerwise_exit_eval} \
     --value_type ${value_type} \
     --validation_set \
-    --workers 1 > ${log_file} 2>&1
+    --workers 1
 fi
 
 if [ ${use_gripper} -eq 0 ] && [ ${use_state} -eq 0 ]

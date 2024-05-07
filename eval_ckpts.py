@@ -138,6 +138,12 @@ ckpt_names = [
     'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_lwproj1L_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_lwproj2L_res_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    
+    
+    # original flamingo
+    'checkpoint_gripper_post_hist_1__exit_layer_-1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth', 
+    'checkpoint_gripper_post_hist_1__exit_layer_11_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth', 
+    'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
 ]
 
 print(ckpt_names)

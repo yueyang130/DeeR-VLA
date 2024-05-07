@@ -46,11 +46,9 @@ import pyrender
 logger = logging.getLogger(__name__)
 
 EP_LEN = 360
+# NUM_SEQUENCES = 1000
 NUM_SEQUENCES = 224
 # NUM_SEQUENCES = 56
-
-# EP_LEN = 100
-# NUM_SEQUENCES = 8
 
 def merge_multi_list(res):
     tmp = []
@@ -155,7 +153,7 @@ def check_loaded_parameters(model, checkpoint):
 
     # Check if there are keys in the checkpoint that are not in the model
     extra_keys = checkpoint_keys - model_keys
-    if extra_keys:
+    if extra_keys and torch.distributed.get_rank() == 0:
         raise KeyError(f'{len(extra_keys)} keys in the checkpoint were not found in the model: {extra_keys}')
 
     # Check if there are keys in the model that are not in the checkpoint

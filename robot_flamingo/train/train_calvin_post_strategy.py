@@ -566,9 +566,10 @@ def main():
     #     print([n for n, p in model.named_parameters() if p.requires_grad])
     #     print([n for n, p in model.perceiver.named_parameters() if p.requires_grad])
     #     print([n for n, p in model.lang_encoder.named_parameters() if p.requires_grad])
-            
-    args.exit_learning_rate = args.exit_learning_rate * args.batch_size_calvin / 6 # adaptive lr
-    args.joint_learning_rate = args.joint_learning_rate * args.batch_size_calvin / 6 # adaptive lr
+    
+    # adaptviely adjust learning rate with the base 8GPU and bs=6
+    args.exit_learning_rate = args.exit_learning_rate * (args.batch_size_calvin / 6) * (args.world_size / 8) # adaptive lr
+    args.joint_learning_rate = args.joint_learning_rate * (args.batch_size_calvin / 6) * (args.world_size / 8) # adaptive lr
     
     layerwsie_lr_scale_list = get_layerwise_lr_list(args)
     if args.rank == 0:

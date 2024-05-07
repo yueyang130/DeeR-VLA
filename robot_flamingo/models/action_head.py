@@ -634,10 +634,12 @@ class DeterministicDecoder(ActionDecoder):
         num_projection_layers : int = 1,
         skip_connection=False,
         exit_list=None,
+        refresh_hidden_state=True, # enabling it would result in more computational cost
     ):
         super(DeterministicDecoder, self).__init__()
         self.fc_state = None
         self.use_state = use_state
+        self.refresh_hidden_state = refresh_hidden_state
         if use_state:
             print('Using state in decoder')
             state_in_dim = 7
@@ -738,7 +740,7 @@ class DeterministicDecoder(ActionDecoder):
                 input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (bs * seq_len, d) maxpooling along lang_seq
         
         
-        if self.is_extra_exit and self.use_layerwise_projection:
+        if self.is_extra_exit and self.use_layerwise_projection: # disabled
             if not isinstance(layer_indices, int):
                 assert (layer_indices.ndim == 1 or layer_indices.ndim == 2) and input_feature.ndim == 2
                 layer_indices = layer_indices.view(-1)
@@ -775,56 +777,46 @@ class DeterministicDecoder(ActionDecoder):
             org_feat = input_feature
             if org_feat.dim() == 2 or org_feat.dim() == 3 and org_feat.shape[1] == 1:
                 org_feat = org_feat.view(self.window_size, org_feat.shape[-1])
-
-        # if state_tensor is not None and self.use_state:
-        #     arm_state = state_tensor[..., :6] # b,len,state_dim-1
-        #     arm_state_embeddings = self.embed_arm_state(arm_state)
-        #     arm_state_embeddings = arm_state_embeddings.view(-1, self.window_size, arm_state_embeddings.shape[-1]) # b,len,h
-        #     gripper_state = ((state_tensor[..., -1]+1.0) / 2).long() # b,len,1
-        #     gripper_state_embeddings = self.embed_gripper_state(gripper_state)
-        #     gripper_state_embeddings = gripper_state_embeddings.view(-1, self.window_size, gripper_state_embeddings.shape[-1]) # b,len,h
-        #     state_embeddings = torch.cat((arm_state_embeddings, gripper_state_embeddings), dim=2) # b,len,2h
-        #     state_embeddings = self.embed_state(state_embeddings) # b,len,h
-
-        #     # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
-        #     input_feature = input_feature + state_embeddings
         
         
         if (not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase)) \
             or isinstance(self.rnn, LayerNormLSTM):
             if input_feature.shape[1] == 1:  # inference, only input current frame
+                
                 self.history_memory.append(input_feature)
                 # print('history mem len:', len(self.history_memory))
                 
-                
-                # if len(self.history_memory) <= self.history_len:  # timesteps less than wondow size
+                if not self.refresh_hidden_state:
+                    x, h_n = self.rnn(input_feature, self.hidden_state)
+                    self.hidden_state = h_n
+                    x = x[:, -1].unsqueeze(1)
+                    self.rnn_out = x.squeeze(1)
+                else:    
+                    if len(self.history_memory) <= self.history_len:  # timesteps less than wondow size
                     
-                x, h_n = self.rnn(input_feature, self.hidden_state)
-                self.hidden_state = h_n
-                x = x[:, -1].unsqueeze(1)
-                self.rnn_out = x.squeeze(1)
-                # print(f'{x=}')
-                # print(f'{self.actions(x)=}')
-                # print(f'{self.gripper(x)=}')
-                    
-                # else:
-                # timesteps greater than window size
-                # the hidden state need to be refreshed based on the history window
-                # print('hist_mem exceeded, refresh hidden state')
-                # if len(self.history_memory) > self.history_len:
-                #     cur_len = len(self.history_memory)
-                #     for _ in range(cur_len - self.history_len):
-                #         self.history_memory.pop(0)
-                #     assert len(self.history_memory) == self.history_len
-                # hist_feature = torch.cat(self.history_memory, dim=1)
-                # x2, h_n2 = self.rnn(hist_feature, None)
-                # x2 = x2[:, -1].unsqueeze(1)
-                # x = x2
-                # print(f'{x2=}')
-                # print(f'{self.actions(x2)=}')
-                # print(f'{self.gripper(x2)=}')
-                # print(f'{x2=}')
-                # print(f'{h_n2[0]=}')
+                        x, h_n = self.rnn(input_feature, self.hidden_state)
+                        self.hidden_state = h_n
+                        x = x[:, -1].unsqueeze(1)
+                        self.rnn_out = x.squeeze(1)
+                        # print(f'{x=}')
+                        # print(f'{self.actions(x)=}')
+                        # print(f'{self.gripper(x)=}')
+                            
+                    else:
+                        # timesteps greater than window size
+                        # the hidden state need to be refreshed based on the history window
+                        if len(self.history_memory) > self.history_len:
+                            cur_len = len(self.history_memory)
+                            for _ in range(cur_len - self.history_len):
+                                self.history_memory.pop(0)
+                            assert len(self.history_memory) == self.history_len
+                        hist_feature = torch.cat(self.history_memory, dim=1)
+                        x2, h_n2 = self.rnn(hist_feature, None)
+                        x2 = x2[:, -1].unsqueeze(1)
+                        x = x2
+                        # print(f'{x2=}')
+                        # print(f'{self.actions(x2)=}')
+                        # print(f'{self.gripper(x2)=}')
                 
             else:
                 # print('input feature lenght > 1', input_feature.shape)
