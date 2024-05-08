@@ -20,7 +20,7 @@ from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
 from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp, check_loaded_parameters
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-from models.value_net import LSTMValueHead, ExitController, MLPValueHead, DiffValueHead, SimValueNet, TimeValueNet, RandomValueNet
+from models.value_net import LSTMValueHead, ExitController, MLPValueHead, DiffValueHead, SimValueNet, TimeValueNet, RandomValueNet, ActionValueNet
 
 
 def random_seed(seed=42, rank=0):
@@ -331,10 +331,13 @@ def main():
     parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
     # dynamic early-exit
     parser.add_argument("--value_type", type=str, default='loss') # loss / sim 
+    parser.add_argument("--threshold_type", type=str, default='mean') # for action delta [mean / L2 / max]
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
     parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
     parser.add_argument("--steps_per_stage", default=1, type=int)
+    parser.add_argument("--use_action_ensemble", default=0, type=int)
     parser.add_argument("--load_threshold", default=1, type=int)
+    parser.add_argument("--num_seq", default=1000, type=int)
     
     args = parser.parse_args()
     
@@ -633,6 +636,9 @@ def main():
         elif args.value_type == 'random':
             value_net = RandomValueNet(exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
             exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
+        elif args.value_type == 'action':
+            value_net = ActionValueNet(exit_list=model.get_all_exit_idx(), exit_head=ddp_model.module.extra_exit, interval=args.exit_interval, window_size=args.window_size, threshold_type=args.threshold_type)
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=True)
         else:
             raise NotImplementedError
             

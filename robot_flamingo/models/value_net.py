@@ -543,64 +543,94 @@ class SimValueNet(BaseValueNet):
 
         
 class ActionValueNet(BaseValueNet):
-    def __init__(self, pooling, exit_ids, interval, exit_head) -> None:
+    def __init__(self,  exit_list, exit_head, interval, window_size, threshold_type) -> None:
         super().__init__()
-        self.pooling = pooling
-        self.interval = interval
-        self.exit_ids = exit_ids
+        self.exit_list = exit_list
         self.exit_head = exit_head
+        self.interval = interval # exit interval
+        self.action_list = []
+        self.window_size = window_size
+        self.threshold_type = threshold_type
         
+    def reset_actions(self):
+        self.action_list = []
         
-        print('Settings for SimValueNet:')
-        print(f'{self.pooling=}')
-        print(f'{self.interval=}')
+    def set_threshold(self, threshold):
+        self.threshold = threshold
+        
+    def update_exit_hidden_state(self):
+        """called after early exiting and executing an action in the environment"""
+        self.exit_head.module.update_hidden_state()
+        
+    def get_ensemble_action(self):
+        assert len(self.action_list) > 0
+        return
         
     def forward(  # type: ignore
         self,
         feats: torch.Tensor,
         i=None,
         mode='infer',
+        rand_layer_feat=None,
         ):
+        
+        def get_delta(action1, action2):
+            delta = torch.abs(action1 - action2)
+            if self.threshold_type == 'mean':
+                delta = delta.mean(-1)
+            elif self.threshold_type == 'L2':
+                delta = delta.pow(2).mean(-1).pow(0.5)
+            elif self.threshold_type == 'max':
+                delta = delta.max(-1)[0]
+            # delta = 1 - get_similarity(action1, action2)
+            else:
+                raise NotImplementedError
+            return delta
+            
         
         if mode == 'infer':
             assert i > 0, 'the first layer similarity is not implemented yet'
             if i > 0 and i - self.interval < 0:
-                prev_i = 0
+                # since we don't have an action before the first action, we can
+                # 1. produce pseudo action using previous layer's feature
+                # 2. using gripper confidence
+                prev_action = self.exit_head(feats[i-1], update_hidden_state=False)
             else:
-                prev_i = i - self.interval
-                
-            if self.pooling:
-                prev_feats = torch.max(feats[prev_i], dim=-2)[0] # (n_exit, bs * action_seq_len, d)
-                last_feats = torch.max(feats[i], dim=-2)[0]
-                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len)
-            else:
-                sim = get_similarity(feats[i], feats[prev_i], detach_f1=True) # (n_exit, bs * action_seq_len, lang_len)
-                sim = sim.mean(dim=-1)    
-                
-            return sim
-        else:
-            last_feats = torch.stack([feats[i] for i in self.exit_ids], dim=0) # (n_exit, bs * action_seq_len, lang_len, d)
+                prev_action = self.action_list[-1]
             
-            prev_feats = torch.zeros_like(last_feats)
-            for i, exit_id in enumerate(self.exit_ids):
-                if exit_id - self.interval >= 0:
-                    prev_feats[i] = feats[exit_id-self.interval]
-                elif exit_id > 0:
-                    prev_feats[i] = feats[0]
-                else:
-                    raise NotImplementedError
-            
-            if self.pooling:
-                prev_feats = torch.max(prev_feats, dim=-2)[0] # (n_exit, bs * action_seq_len, d)
-                last_feats = torch.max(last_feats, dim=-2)[0]
-                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len)
-            else:
-                sim = get_similarity(last_feats, prev_feats, detach_f1=True) # (n_exit, bs * action_seq_len, lang_len)
-                sim = sim.mean(dim=-1)
-        
-            return sim
+            action = self.exit_head(feats[i], update_hidden_state=False)
+            self.action_list.append(action)   
+            delta = get_delta(action[0], prev_action[0])
 
-        
+            return delta
+        else:
+            assert 0 not in self.exit_list
+            exits_feat = [feats[i] for i in [0]+self.exit_list] # (n_exit+1, bs * action_seq_len, lang_len, d)
+            
+            exits_action_list = []
+            lang_len, d = feats[0].shape[1:]
+            for seq_id in range(self.window_size//2-1, self.window_size-1):
+                # (bs * action_seq_len, lang_len, d) -> (bs, seq_id, lang_len, d)
+                prev_time_feat = rand_layer_feat.reshape(-1, self.window_size, lang_len, d)[:, :seq_id, :, :]
+                
+                exit_action = [] # (exit+1, bs, dim)
+                for i in [0]+self.exit_list:
+                    # (bs * action_seq_len, lang_len, d) -> (bs, 1, lang_len, d)
+                    last_time_feat = feats[i].reshape(-1, self.window_size, lang_len, d)[:, seq_id:seq_id+1, :, :]
+                    combined_feat = torch.concat([prev_time_feat, last_time_feat], dim=1) # (bs, seq_id+1, lang_len, d)
+            
+                    self.exit_head.last_action = True
+                    action = self.exit_head(combined_feat) # (bs, dim)
+                    self.exit_head.last_action = False
+                    exit_action.append(action[0].squeeze(1))   # (exit+1, bs, dim)
+                exits_action_list.append(torch.stack(exit_action)) # (seq_action/2, exit+1, bs, dim)
+            exits_action_list = torch.stack(exits_action_list).permute(1, 2, 0, 3)  # (exit+1, bs, seq_action/2, dim)
+                    
+            prev_actions = exits_action_list[:-1] # (n_exit, bs, action_seq_len, dim)
+            last_actions = exits_action_list[1:] # (n_exit, bs, action_seq_len, dim)
+            delta = get_delta(prev_actions, last_actions).flatten(1,2) # (n_exit, bs*action_seq_len)
+            return delta
+            
 
 class TimeValueNet(BaseValueNet):
     """
@@ -693,6 +723,10 @@ class ExitController(torch.nn.Module):
                 pred_value_list, target_value_list = generate_values(args, model, self.value_net, dataloader, device_id=device_id)
             elif isinstance(self.value_net, SimValueNet):
                 pred_value_list, target_value_list = generate_sim_values(args, model, self.value_net, dataloader, device_id=device_id)
+            elif isinstance(self.value_net, ActionValueNet):
+                # pred_value_list, target_value_list = generate_action_values(args, model, self.value_net, dataloader, device_id=device_id)
+                self.thresholds = {self.exit_id_list[i] : exit_ratio  for i in range(len(self.exit_id_list))}
+                return
             elif isinstance(self.value_net, TimeValueNet) or isinstance(self.value_net, RandomValueNet):
                 self.thresholds = {}
                 return
@@ -772,6 +806,8 @@ class ExitController(torch.nn.Module):
         assert isinstance(i, int), 'index muast be integer'
         if i not in self.exit_id_list:
             return False
+        if i == self.exit_id_list[-1]:
+            return True
         
         # if still in a stage just use previous exit id
         if self.cur_step % self.steps_per_stage != 0:
@@ -781,6 +817,7 @@ class ExitController(torch.nn.Module):
         if isinstance(self.value_net, TimeValueNet) or isinstance(self.value_net, RandomValueNet):
             exit_flag = self.value_net(i)
             if exit_flag:
+                # decide to early exit and execute action
                 self.cur_exit_id = i
             return exit_flag
         
@@ -789,6 +826,8 @@ class ExitController(torch.nn.Module):
         elif isinstance(self.value_net, LSTMValueHead):
             value = self.value_net(x[i], return_value=True)
         elif isinstance(self.value_net, SimValueNet):
+            value = self.value_net(x, i)
+        elif isinstance(self.value_net, ActionValueNet):
             value = self.value_net(x, i)
         else:
             raise NotImplementedError
@@ -906,6 +945,114 @@ def generate_sim_values(
 
         feats = final_output.hidden_states # n_exit x (bs * action_seq_len, lang_len, d)
         sim = value_net(feats, mode='generate')
+        # record
+        pred_value_list.append(sim)  
+
+    pred_value_list = torch.cat(pred_value_list, dim=1)
+    # pred_value_list = pred_value_list.flatten(1, 2)
+        
+    # return pred_value_list, target_value_list
+    return pred_value_list, None
+
+@torch.no_grad()
+def generate_action_values(
+    args,
+    model,
+    value_net,
+    calvin_loader,
+    device_id,
+):
+    
+    num_batches_per_epoch_calvin = calvin_loader.num_batches
+    num_batches_per_epoch = num_batches_per_epoch_calvin
+
+    cast_dtype = get_cast_dtype(args.precision)
+
+    model.eval()
+    value_net.eval()
+
+    # loop through dataloader
+    t = tqdm(
+        enumerate(calvin_loader),
+        disable=args.rank != 0,
+        total=num_batches_per_epoch,
+        initial=0,
+    )
+    t.set_description(f"generate values by similarity")
+    mv_avg_loss = []
+    pred_value_list = []
+    
+    for num_steps, batch_calvin in t:
+        global_step = num_steps
+        
+        # put images and labels on device
+        images = (batch_calvin[0].to(device_id, dtype=cast_dtype, non_blocking=True).unsqueeze(2).unsqueeze(2))
+        gripper = (batch_calvin[3].to(device_id, dtype=cast_dtype, non_blocking=True).unsqueeze(2).unsqueeze(2))
+
+        # input_ids is LongTensor and does not require conversion precision
+        # repeat the input_ids to match the sequence length of the images
+        if args.fusion_mode != 'vit_concat':
+            input_ids = batch_calvin[1][0].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, images.shape[1], 1)
+        else:
+            input_ids = batch_calvin[1][0].to(device_id, non_blocking=True)
+        # input_ids = batch_calvin[1][0].to(device_id, non_blocking=True)
+
+        # do the same to the attention mask 
+        if args.fusion_mode != 'vit_concat':
+            attention_mask = batch_calvin[1][1].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, images.shape[1], 1)
+        else:
+            attention_mask = batch_calvin[1][1].to(device_id, non_blocking=True)
+        
+        state_tensor = batch_calvin[4].to(device_id, dtype=cast_dtype, non_blocking=True)
+        robot_obs = batch_calvin[5].to(device_id, dtype=cast_dtype, non_blocking=True)
+        if args.clip_state:
+            state_tensor = torch.cat([state_tensor[..., :6], state_tensor[..., [-1]]], dim=-1)
+        labels = batch_calvin[2].to(device_id, dtype=cast_dtype, non_blocking=True)
+        if args.tcp_rel:
+            if args.multi_step_action == 1:
+                labels = world_to_tcp_frame(labels, state_tensor)
+            else:
+                bs, seq_len = labels.shape[:2]
+                labels = world_to_tcp_frame(labels, robot_obs)
+                labels = labels.view(bs, seq_len, args.multi_step_action, -1)
+        
+        state_tensor = state_tensor.unsqueeze(2).unsqueeze(2)
+
+        # merge the batch and the sequence dimension
+        images = images.flatten(0, 1)
+        gripper = gripper.flatten(0, 1)
+        state_tensor = state_tensor.flatten(0, 1)
+        if args.fusion_mode != 'vit_concat':
+            input_ids = input_ids.flatten(0, 1)
+            attention_mask = attention_mask.flatten(0, 1)
+
+        # [:6] is the joint position and [6:] is the gripper control, which is -1, 1, thus we need to convert it to 0, 1
+        if args.use_hist:
+            labels = labels[:, [-1]]  # only calculate last step action
+        if args.fusion_mode == 'vit_concat':
+            labels = labels[:, -1]
+        labels = [labels[..., :6], (labels[..., 6:] + 1) // 2]
+        # print(f'{args.amp=}')
+       
+        with torch.cuda.amp.autocast(enabled=args.amp), torch.no_grad():
+            if args.head_type == 'deterministic':
+                final_output, exit_outputs, extra_exit_output, rand_layer_feat, _ = model(
+                    vision_x=images,
+                    lang_x=input_ids,
+                    attention_mask=attention_mask,
+                    # labels=labels,  # loss计算放在外面
+                    vision_gripper=gripper,
+                    state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
+                    with_gripper_logits=True,
+                    return_in_feat=True,
+                )
+                
+                # get joint outputs
+                all_outputs = exit_outputs + [final_output.logits]
+
+        feats = final_output.hidden_states # n_exit x (bs * action_seq_len, lang_len, d)
+        rand_layer_feat = rand_layer_feat # (bs * action_seq_len, lang_len, d)
+        sim = value_net(feats, mode='generate', rand_layer_feat=rand_layer_feat)
         # record
         pred_value_list.append(sim)  
 

@@ -11,6 +11,8 @@ parser.add_argument('--value_net_ckpt_dir', type=str, default='', help='The chec
 parser.add_argument('--exit_ratio', nargs='+', type=float, default=[1.0], help='a list')
 parser.add_argument('--single_step', action='store_true', help='If set, evlauate in single step mode')
 parser.add_argument('--node_num', type=int)
+parser.add_argument("--num_seq", type=int, default=56, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
+
 parser.add_argument(
         "--amp",
         default=False,
@@ -20,7 +22,8 @@ parser.add_argument("--multi_execution", type=int, default=1, help="how many act
 parser.add_argument("--layerwise_exit_eval", action='store_true', default=False) 
 
 parser.add_argument("--eval_exit_mode", type=str, default='last', choices=['last', 'all', 'dynamic']) # only eval the last exit / all exits / dynamic early-exit mechanism
-parser.add_argument("--value_type", type=str, default='loss', choices=['loss', 'sim', 'time', 'random']) # only eval the last exit / all exits / dynamic early-exit mechanism
+parser.add_argument("--value_type", type=str, default='loss', choices=['loss', 'sim', 'time', 'random', 'action']) # only eval the last exit / all exits / dynamic early-exit mechanism
+parser.add_argument("--threshold_type", type=str, default='mean', choices=['mean', 'L2', 'max']) 
 
 
 # Parse the arguments
@@ -141,10 +144,21 @@ ckpt_names = [
     
     
     # original flamingo
-    'checkpoint_gripper_post_hist_1__exit_layer_-1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth', 
-    'checkpoint_gripper_post_hist_1__exit_layer_11_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth', 
-    'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
+    # 'checkpoint_gripper_post_hist_1__exit_layer_-1_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth', 
+    # 'checkpoint_gripper_post_hist_1__exit_layer_11_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth', 
+    # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
+
+    # ABCD
+    # 'stg=post_3+3_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
+    # 'stg=post_3+3_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'stg=post_3+3_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    
+    # ABC
+    'stg=post_4+4_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    'stg=post_4+4_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    'stg=post_4+4_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_5.pth',
 ]
+
 
 print(ckpt_names)
 for ckpt_name in ckpt_names:
@@ -161,9 +175,9 @@ for ckpt_name in ckpt_names:
             value_net_ckpt_path = os.path.join(args.value_net_ckpt_dir, ckpt_name[:-4]+'_value_net_mlp_b20_1.pth')
         else:
             value_net_ckpt_path = 'None'
-        log_dir = f'log224_{args.ckpt_dir}'
+        log_dir = f'log_{args.ckpt_dir}'
         os.makedirs(log_dir, exist_ok=True)
-        prefix = f'evaluate'
+        prefix = f'evaluate{args.num_seq}'
         if args.layerwise_exit_eval:
             prefix += '_per_exit'
         if args.amp:
@@ -172,6 +186,8 @@ for ckpt_name in ckpt_names:
         if args.eval_exit_mode == 'dynamic':
             print(f'eval exit ratio = {r}')
             prefix += f'_{args.value_type}'
+            if args.value_type == 'action':
+                prefix += f'_{args.threshold_type}'
             prefix += f'_{r}'
         prefix += '_exit'
         if args.multi_execution > 1:
@@ -200,6 +216,6 @@ for ckpt_name in ckpt_names:
         # print('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state))
         # exit(0)
 
-        os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, 
-            use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode, args.multi_execution, value_net_ckpt_path, r, args.layerwise_exit_eval, args.value_type))
+        os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, 
+            use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode, args.multi_execution, value_net_ckpt_path, r, args.layerwise_exit_eval, args.value_type, args.num_seq, args.threshold_type))
 

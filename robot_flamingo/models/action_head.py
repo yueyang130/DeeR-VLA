@@ -634,12 +634,12 @@ class DeterministicDecoder(ActionDecoder):
         num_projection_layers : int = 1,
         skip_connection=False,
         exit_list=None,
-        refresh_hidden_state=True, # enabling it would result in more computational cost
+        refresh_window=False, # enabling it would result in more computational cost
     ):
         super(DeterministicDecoder, self).__init__()
         self.fc_state = None
         self.use_state = use_state
-        self.refresh_hidden_state = refresh_hidden_state
+        self.refresh_window = refresh_window
         if use_state:
             print('Using state in decoder')
             state_in_dim = 7
@@ -705,6 +705,11 @@ class DeterministicDecoder(ActionDecoder):
 
     def clear_hidden_state(self) -> None:
         self.hidden_state = None
+        
+    def update_hidden_state(self):
+        assert self.tmp_hidden_state is not None
+        self.hidden_state = self.tmp_hidden_state
+        self.tmp_hidden_state = None
 
     def forward(  # type: ignore
         self,
@@ -715,30 +720,19 @@ class DeterministicDecoder(ActionDecoder):
         return_aggregate_feature=False,
         with_gripper_logits=False,
         layer_indices=None,
-        # update_hidden_state=True,
+        update_hidden_state=True,
     ):
         self.return_feature = return_feature
         if input_feature.dim() == 4:
+            cur_window_size = input_feature.shape[1]
             input_feature = input_feature.reshape(-1, *input_feature.shape[2:]) 
+        else:
+            cur_window_size = self.window_size
         
         
         # reshape
         if input_feature.dim() == 3: # (bs * action_seq_len, lang_len, d)
-            if self.fusion_mode == 'two_way':
-                input_feature = input_feature.reshape(-1, self.window_size, *input_feature.shape[1:]) 
-                
-                bs = int(input_feature.shape[0] // 2)
-                
-                rgb_feat = input_feature[:bs].view(bs*self.window_size, *input_feature.shape[2:])
-                rgb_feat = self.global_1d_pool(rgb_feat.permute(0, 2, 1)).squeeze(-1)
-                
-                gripper_feat = input_feature[bs:].view(bs*self.window_size, *input_feature.shape[2:])
-                gripper_feat = self.global_1d_pool(gripper_feat.permute(0, 2, 1)).squeeze(-1)
-                
-                input_feature = torch.cat([rgb_feat, gripper_feat], dim=-1)
-            else:
-                input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (bs * seq_len, d) maxpooling along lang_seq
-        
+            input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (bs * seq_len, d) maxpooling along lang_seq
         
         if self.is_extra_exit and self.use_layerwise_projection: # disabled
             if not isinstance(layer_indices, int):
@@ -770,13 +764,13 @@ class DeterministicDecoder(ActionDecoder):
             # inference
                 input_feature = self.layerwise_projection_dict[str(layer_indices)](input_feature)
         
-        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (bs, seq_len, d)
+        input_feature = input_feature.reshape(-1, cur_window_size, input_feature.shape[1]) # (bs, seq_len, d)
         
         if self.return_feature:
             # org_feat = copy.deepcopy(input_feature)
             org_feat = input_feature
             if org_feat.dim() == 2 or org_feat.dim() == 3 and org_feat.shape[1] == 1:
-                org_feat = org_feat.view(self.window_size, org_feat.shape[-1])
+                org_feat = org_feat.view(cur_window_size, org_feat.shape[-1])
         
         
         if (not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase)) \
@@ -786,12 +780,15 @@ class DeterministicDecoder(ActionDecoder):
                 self.history_memory.append(input_feature)
                 # print('history mem len:', len(self.history_memory))
                 
-                if not self.refresh_hidden_state:
+                if not self.refresh_window:
                     x, h_n = self.rnn(input_feature, self.hidden_state)
-                    self.hidden_state = h_n
+                    if update_hidden_state:
+                        self.hidden_state = h_n
+                    else:
+                        self.tmp_hidden_state = h_n
                     x = x[:, -1].unsqueeze(1)
                     self.rnn_out = x.squeeze(1)
-                else:    
+                else:   # inference code for original Robofalmingo; disabled in DeerVLM for efficiency
                     if len(self.history_memory) <= self.history_len:  # timesteps less than wondow size
                     
                         x, h_n = self.rnn(input_feature, self.hidden_state)

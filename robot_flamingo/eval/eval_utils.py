@@ -46,9 +46,7 @@ import pyrender
 logger = logging.getLogger(__name__)
 
 EP_LEN = 360
-# NUM_SEQUENCES = 1000
-NUM_SEQUENCES = 224
-# NUM_SEQUENCES = 56
+NUM_SEQUENCES = -1
 
 def merge_multi_list(res):
     tmp = []
@@ -208,7 +206,7 @@ def make_env_debug(dataset_path):
 
 class ModelWrapper(CalvinBaseModel):
     def __init__(self, model, tokenizer, image_processor, cast_dtype, use_diff, history_len=None, future_act_len=-1,
-                 amp=False, exit_id=None, early_exit=False, exit_controller=None, multi_execution=1, ):
+                 amp=False, exit_id=None, early_exit=False, exit_controller=None, multi_execution=1, use_action_ensemble=False):
         super().__init__()
         self.model = model
         self.replan = model.module.replan
@@ -229,6 +227,7 @@ class ModelWrapper(CalvinBaseModel):
         self.dynamic_early_exit = early_exit
         self.exit_controller = exit_controller
         self.multi_execution = multi_execution
+        self.use_action_ensemble = use_action_ensemble
         self.current_exit_layer = exit_id if isinstance(exit_id, int) else -1
         
         if self.model.module.act_step==1:
@@ -475,7 +474,12 @@ class ModelWrapper(CalvinBaseModel):
                 if hasattr(action, 'exit_layer'):
                     self.current_exit_layer = action.exit_layer
                 if self.model.module.act_step == 1:
-                    action = torch.concat((action.logits[0], action.logits[1] > 0.5), dim=2).squeeze(0)[-1] # support multi step history
+                    if not self.use_action_ensemble:
+                        action = torch.concat((action.logits[0], action.logits[1] > 0.5), dim=2).squeeze(0)[-1] # support multi step history
+                    else:
+                        action = self.exit_controller.value_net.get_ensemble_action()
+                        action = torch.concat((action[0], action[1] > 0.5), dim=2).squeeze(0)[-1]
+                        
                     action[-1] = (action[-1] - 0.5) * 2  # scale to -1 or 1
                     action = torch.stack([action]*self.multi_execution, dim=0)
                     
@@ -755,6 +759,8 @@ def eval_one_epoch_calvin(args, model, dataset_path, image_processor, tokenizer,
 
 def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokenizer, eval_log_dir=None, debug=False, future_act_len=-1, reset=False, diverse_inst=False, exit_controller=None, dataloader=None):
 
+    global NUM_SEQUENCES
+    NUM_SEQUENCES = args.num_seq
     env = make_env(dataset_path)
     cast_dtype = get_cast_dtype(args.precision)
     hist_len = None
@@ -767,7 +773,7 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
         if args.rank == 0: 
             if args.use_extra_exit:
                 print("\nEvaluate the extra exit with features from the last layer !\n")
-        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1, multi_execution=args.multi_execution)
+        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
         evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
         
     elif args.eval_exit_mode == 'all':
