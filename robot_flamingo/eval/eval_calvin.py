@@ -671,6 +671,10 @@ def main():
             if args.rank==0: 
                 print("save new values for threshold to ckpt.")
                 torch.save(checkpoint, args.evaluate_from_checkpoint)
+                
+        del calvin_dataset
+        del calvin_loader
+        del checkpoint
             
     else:
         ddp_exit_controller = None
@@ -679,6 +683,7 @@ def main():
     # clear GPU memory used by finding thresholds        
     gc.collect()
     torch.cuda.empty_cache()
+
     
     eval_log_dir = None
     if args.visualize:
@@ -695,7 +700,6 @@ def main():
         reset=args.reset,
         diverse_inst=args.diverse_inst,
         exit_controller=ddp_exit_controller,
-        dataloader=calvin_loader,
     )
 
 

@@ -758,7 +758,7 @@ def eval_one_epoch_calvin(args, model, dataset_path, image_processor, tokenizer,
     evaluate_policy(wrapped_model, env, 0, args.calvin_conf_path)
 
 
-def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokenizer, eval_log_dir=None, debug=False, future_act_len=-1, reset=False, diverse_inst=False, exit_controller=None, dataloader=None):
+def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokenizer, eval_log_dir=None, debug=False, future_act_len=-1, reset=False, diverse_inst=False, exit_controller=None):
 
     global NUM_SEQUENCES
     NUM_SEQUENCES = args.num_seq
