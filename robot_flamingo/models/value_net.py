@@ -753,9 +753,10 @@ class ExitController(torch.nn.Module):
         _, sorted_idx = pred_value_gathered.sort(dim=1, descending=not self.leq)
 
         filtered = torch.zeros(n_sample)
-        T = torch.Tensor(n_stage).fill_(-1e8) if self.leq else torch.Tensor(n_stage).fill_(1e8)
-        
         real_num_exit = len([x for x in self.exit_id_list if x <= self.max_layer])
+        
+        T = torch.Tensor(real_num_exit).fill_(-1e8) if self.leq else torch.Tensor(real_num_exit).fill_(1e8)
+        
         
         if self.exit_dist == 'exp':
             probs = exit_ratio ** torch.arange(1, real_num_exit+1) # n (including the last exit)
@@ -777,9 +778,6 @@ class ExitController(torch.nn.Module):
             raise ValueError("Unsupported exit distribution")
         
         probs /= probs.sum()
-        _probs = torch.zeros(self.num_exit)
-        _probs[:real_num_exit] = probs
-        probs = _probs
         
         if args.rank==0: print('Expected early exit rate ', probs)
 
@@ -801,9 +799,9 @@ class ExitController(torch.nn.Module):
                 # filtered.add_(pred_value_gathered[k].greater(T[k]).type_as(filtered))
 
         if self.leq:
-            T[n_stage - 1] = 1e8
+            T[real_num_exit - 1] = 1e8
         else:
-            T[n_stage - 1] = -1e8
+            T[real_num_exit - 1] = -1e8
         
         # verify
         # count = [0]
@@ -813,13 +811,13 @@ class ExitController(torch.nn.Module):
         #     count.append((filtered>0).sum()-sum(count))
         # percent = [c / sum(count) for c in count[1:]]    
 
-        self.thresholds = {self.exit_id_list[i] : T[i]  for i in range(n_stage)}
+        self.thresholds = {self.exit_id_list[i] : T[i]  for i in range(real_num_exit)}
         if args.rank == 0:
             print(f'Mean value for each layer:')
             for i in range(n_stage):
                 print(f'{i+1} : {pred_value_gathered[i].mean():.5f}, {pred_value_gathered[i].std():.5f}, {pred_value_gathered[i].max():.5f}, {pred_value_gathered[i].min():.5f}')
             print(f'Find threshold on {n_sample} samples:')
-            for i in range(n_stage):
+            for i in range(real_num_exit):
                 print(f'{i+1} : {T[i]:.5f}')
         return pred_value_gathered
     
@@ -1072,10 +1070,9 @@ def generate_action_values(
                     state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
                     with_gripper_logits=True,
                     return_in_feat=True,
+                    only_extra_exit=True,
                 )
-                
-                # get joint outputs
-                all_outputs = exit_outputs + [final_output.logits]
+
 
         feats = final_output.hidden_states # n_exit x (bs * action_seq_len, lang_len, d)
         rand_layer_feat = rand_layer_feat # (bs * action_seq_len, lang_len, d)

@@ -36,8 +36,8 @@ mpt_dict = {
         "openflamingo_checkpoint": "path_to/OpenFlamingo-4B-vitl-rpj3b/checkpoint.pt"
     },
     "mpt_9b": {
-        "lang_encoder_path": "path_to/mpt-7b", 
-        "tokenizer_path": "path_to/mpt-7b", 
+        "lang_encoder_path": "/mnt/bn/yueyang/archive/mpt-7b", 
+        "tokenizer_path": "/mnt/bn/yueyang/archive/mpt-7b", 
         "cross_attn_every_n_layers": 4,
         "openflamingo_checkpoint": "/mnt/bn/yueyang/archive/OpenFlamingo-9B-vitl-mpt7b.pt"
     },

@@ -3,6 +3,7 @@
 import argparse
 import glob
 import os
+import gc
 import re
 import random
 from robot_flamingo.eval.eval_utils import eval_one_epoch_calvin_ddp
@@ -515,7 +516,7 @@ def main():
         tanh_squash_dist=args.tanh_squash_dist,
         state_dependent_std=args.state_dependent_std,
         early_exit_layer=min(args.early_exit_layer, args.max_layer),
-        multi_exit=args.multi_exit,
+        multi_exit=False if not args.layerwise_exit_eval else True, # save GPU memory by not creating auxiliary action heads 1,2,..,N
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
         lstm_dropout=args.lstm_dropout,
@@ -659,19 +660,25 @@ def main():
         calvin_loader = calvin_dataset.dataloader
         
         # find threshold
-        values = value_net_ckpt["values"] if args.value_type=='loss' and value_net_ckpt and  "values" in value_net_ckpt else None
+        values = checkpoint['values'] if checkpoint and  "values" in checkpoint else None
         if args.load_threshold and values is not None:
             print(f'load values for threshold')
             ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, values)
         else:
             values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio)
-            # value_net_ckpt["values"] = values
-            # if args.rank==0: print("save new values for threshold to value net ckpt.")
-            # torch.save(value_net_ckpt, args.value_net_ckpt)
-        
+            
+            checkpoint["values"] = values
+            if args.rank==0: 
+                print("save new values for threshold to ckpt.")
+                torch.save(checkpoint, args.evaluate_from_checkpoint)
+            
     else:
         ddp_exit_controller = None
         calvin_loader = None
+        
+    # clear GPU memory used by finding thresholds        
+    gc.collect()
+    torch.cuda.empty_cache()
     
     eval_log_dir = None
     if args.visualize:

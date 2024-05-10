@@ -257,8 +257,14 @@ class MPTFlamingo(nn.Module):
                 else:
                     self.lm_exits[i] = get_encoder(is_extra_exit=False)
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values()) # make exits on gpu  device automatically
+
             print(f'{len(self.lm_exits)} internal exits {list(self.lm_exits.keys())} and one internal exit!')  
-            
+        else:
+            for i in range(exit_interval-1, early_exit_layer, exit_interval):
+                    self.lm_exits[i] = nn.Identity()
+            self.lm_exit_modules = nn.ModuleList(self.lm_exits.values())
+
+                    
         # extra one exit
         self.use_extra_exit = use_extra_exit
         self.detach_extra_exit = detach_extra_exit
@@ -274,7 +280,7 @@ class MPTFlamingo(nn.Module):
                 print('eval the extra exit!') 
             else:
                 print('eval layerwise exits!')    
-
+        
         
     def get_all_exit_idx(self):
         # not include the extra exit
