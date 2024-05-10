@@ -26,7 +26,7 @@ parser.add_argument("--value_type", type=str, default='loss', choices=['loss', '
 parser.add_argument("--threshold_type", type=str, default='mean', choices=['mean', 'L2', 'max']) 
 parser.add_argument("--exit_dist", type=str, default='exp', choices=['exp', 'gauss', 'gamma']) 
 parser.add_argument("--use_action_ensemble", type=int, default=0)
-parser.add_argument("--max_layer", type=int, default=12) # use for constraining memory/max flop. 
+parser.add_argument("--max_layer", type=int) # use for constraining memory/max flop. 
 parser.add_argument("--note", type=str, default='')
 
 

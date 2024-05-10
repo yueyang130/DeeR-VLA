@@ -335,7 +335,7 @@ def main():
     parser.add_argument("--threshold_type", type=str, default='mean') # for action delta [mean / L2 / max]
     parser.add_argument("--exit_dist", type=str, default='') # for exit dist [exp / gauss / gamma]
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
-    parser.add_argument("--max_layer", type=int)
+    parser.add_argument("--max_layer", type=int, default=None)
     parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
     parser.add_argument("--steps_per_stage", default=1, type=int)
     parser.add_argument("--use_action_ensemble", default=0, type=int)
@@ -420,6 +420,17 @@ def main():
             break
         
     print(f'Model class : {args.llm_name}')
+    
+    if args.early_exit_layer < 0:
+        if name == 'mpt_3b' or name == 'mpt_dolly_3b':
+            args.early_exit_layer += 24
+        elif name == 'mpt_9b':
+            args.early_exit_layer += 32
+        else:
+            raise NotImplementedError
+    if not args.max_layer:
+        args.max_layer = args.early_exit_layer
+        
     
     args.lm_path = mpt_dict[args.llm_name]["lang_encoder_path"]
     args.tokenizer_path = mpt_dict[args.llm_name]["tokenizer_path"]
