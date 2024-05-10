@@ -477,7 +477,8 @@ class ModelWrapper(CalvinBaseModel):
                     if not self.use_action_ensemble:
                         action = torch.concat((action.logits[0], action.logits[1] > 0.5), dim=2).squeeze(0)[-1] # support multi step history
                     else:
-                        action = self.exit_controller.value_net.get_ensemble_action()
+                        action = self.exit_controller.module.value_net.get_ensemble_action()
+                        self.exit_controller.module.value_net.reset_actions()
                         action = torch.concat((action[0], action[1] > 0.5), dim=2).squeeze(0)[-1]
                         
                     action[-1] = (action[-1] - 0.5) * 2  # scale to -1 or 1
@@ -786,13 +787,13 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
         for exit_id in reversed(model.module.get_all_exit_idx()):
             # if exit_id == 11: continue
             if args.rank == 0: print('#'*40 + '\n' + f'Evaluate the exit with exit_id={exit_id}!\n' + '#'*40 + '\n')
-            wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id, multi_execution=args.multi_execution)
+            wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
             evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
             torch.distributed.barrier() # don't conduct next eval until all threads reach
     
     elif args.eval_exit_mode == 'dynamic':
         if args.rank == 0: print("\nEvaluate with dynamic exit!\n")
-        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, early_exit=True, exit_controller=exit_controller, multi_execution=args.multi_execution)
+        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, early_exit=True, exit_controller=exit_controller, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
         evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
 
     else:

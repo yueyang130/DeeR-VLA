@@ -31,6 +31,10 @@ layerwise_exit_eval=${14}
 value_type=${15}
 num_seq=${16}
 threshold_type=${17}
+use_action_ensemble=${18}
+exit_dist=${19}
+max_layer=${20}
+
 export MESA_GL_VERSION_OVERRIDE=4.1
 echo logging to ${log_file}
 
@@ -84,7 +88,8 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --exit_ratio ${exit_ratio} \
     --layerwise_exit_eval ${layerwise_exit_eval} \
     --value_type ${value_type} \
-    --threshold_type ${threshold_type} \
+    --threshold_type ${threshold_type} --exit_dist ${exit_dist} --max_layer ${max_layer} \
+    --use_action_ensemble ${use_action_ensemble} \
     --num_seq ${num_seq} \
     --validation_set \
     --workers 1 > ${log_file} 2>&1

@@ -163,10 +163,10 @@ def get_ckpt_prefix(args, train_value=False):
     #     ckpt_name += 'lstm{}L_'.format(args.lstm_num_layers)
     # if args.lstm_layernorm:
     #     ckpt_name += 'lstmln_'
-    # if args.exit_dropout != 0:
-    #     ckpt_name += 'mlpdrp={}_{}_'.format(args.exit_dropout, args.dropout_mode)    
-    # if args.lstm_dropout != 0:
-    #     ckpt_name += 'lstmdrp={}_'.format(args.lstm_dropout)
+    if args.exit_dropout != 0:
+        ckpt_name += 'mlpdrp={}_{}_'.format(args.exit_dropout, args.dropout_mode)    
+    if args.lstm_dropout != 0:
+        ckpt_name += 'lstmdrp={}_'.format(args.lstm_dropout)
     if args.exit_decay:
         ckpt_name += 'decay_'
     if args.data_percent < 1.0:

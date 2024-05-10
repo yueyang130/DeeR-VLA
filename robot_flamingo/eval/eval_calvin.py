@@ -332,7 +332,9 @@ def main():
     # dynamic early-exit
     parser.add_argument("--value_type", type=str, default='loss') # loss / sim 
     parser.add_argument("--threshold_type", type=str, default='mean') # for action delta [mean / L2 / max]
+    parser.add_argument("--exit_dist", type=str, default='') # for exit dist [exp / gauss / gamma]
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
+    parser.add_argument("--max_layer", type=int)
     parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
     parser.add_argument("--steps_per_stage", default=1, type=int)
     parser.add_argument("--use_action_ensemble", default=0, type=int)
@@ -512,7 +514,7 @@ def main():
         head_type=args.head_type,
         tanh_squash_dist=args.tanh_squash_dist,
         state_dependent_std=args.state_dependent_std,
-        early_exit_layer=args.early_exit_layer,
+        early_exit_layer=min(args.early_exit_layer, args.max_layer),
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
         exit_dropout=args.exit_dropout,
@@ -563,7 +565,7 @@ def main():
         ckpt_dict = checkpoint["model_state_dict"]
     except:
         ckpt_dict = checkpoint  
-    check_loaded_parameters(ddp_model, ckpt_dict)
+    # check_loaded_parameters(ddp_model, ckpt_dict) # disabled due to max layer constrain
     ddp_model.load_state_dict(ckpt_dict, False)  # 只保存了求梯度的部分
     ddp_model.eval()
     
@@ -638,7 +640,7 @@ def main():
             exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
         elif args.value_type == 'action':
             value_net = ActionValueNet(exit_list=model.get_all_exit_idx(), exit_head=ddp_model.module.extra_exit, interval=args.exit_interval, window_size=args.window_size, threshold_type=args.threshold_type)
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=True)
+            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=True, exit_dist=args.exit_dist, max_layer=args.max_layer)
         else:
             raise NotImplementedError
             

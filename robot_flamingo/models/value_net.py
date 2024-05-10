@@ -8,6 +8,7 @@ from tqdm.auto import tqdm
 import math
 from abc import abstractmethod
 import numpy as np
+import scipy.stats
 
 def get_similarity(f_x1s, f_x2s, detach_f1=False):
     if detach_f1:
@@ -564,7 +565,8 @@ class ActionValueNet(BaseValueNet):
         
     def get_ensemble_action(self):
         assert len(self.action_list) > 0
-        return
+        actions, grippers = zip(*self.action_list[-2:])
+        return torch.stack(actions, dim=0).mean(0), torch.stack(grippers, dim=0).mean(0)
         
     def forward(  # type: ignore
         self,
@@ -704,7 +706,7 @@ class RandomValueNet(BaseValueNet):
             
         
 class ExitController(torch.nn.Module):
-    def __init__(self, value_net, exit_id_list, steps_per_stage, leq=True):
+    def __init__(self, value_net, exit_id_list, steps_per_stage, exit_dist='exp', leq=True, max_layer=12):
         super().__init__()
         self.value_net = value_net
         self.thresholds = None
@@ -712,6 +714,8 @@ class ExitController(torch.nn.Module):
         self.exit_id_list = exit_id_list
         self.num_exit = len(self.exit_id_list)
         self.steps_per_stage = steps_per_stage
+        self.exit_dist = exit_dist
+        self.max_layer = min(max_layer - 1, self.exit_id_list[-1])
         # for debug
         # self.history_values = [[] for i in range(num_exit)]
         
@@ -724,9 +728,9 @@ class ExitController(torch.nn.Module):
             elif isinstance(self.value_net, SimValueNet):
                 pred_value_list, target_value_list = generate_sim_values(args, model, self.value_net, dataloader, device_id=device_id)
             elif isinstance(self.value_net, ActionValueNet):
-                # pred_value_list, target_value_list = generate_action_values(args, model, self.value_net, dataloader, device_id=device_id)
-                self.thresholds = {self.exit_id_list[i] : exit_ratio  for i in range(len(self.exit_id_list))}
-                return
+                pred_value_list, target_value_list = generate_action_values(args, model, self.value_net, dataloader, device_id=device_id)
+                # self.thresholds = {self.exit_id_list[i] : exit_ratio  for i in range(len(self.exit_id_list))}
+                # return
             elif isinstance(self.value_net, TimeValueNet) or isinstance(self.value_net, RandomValueNet):
                 self.thresholds = {}
                 return
@@ -750,12 +754,36 @@ class ExitController(torch.nn.Module):
 
         filtered = torch.zeros(n_sample)
         T = torch.Tensor(n_stage).fill_(-1e8) if self.leq else torch.Tensor(n_stage).fill_(1e8)
-        probs = exit_ratio ** torch.arange(1, self.num_exit+1) # n (including the last exit)
-        # probs[0] = 0.0
+        
+        real_num_exit = len([x for x in self.exit_id_list if x <= self.max_layer])
+        
+        if self.exit_dist == 'exp':
+            probs = exit_ratio ** torch.arange(1, real_num_exit+1) # n (including the last exit)
+    
+        elif self.exit_dist == 'gauss':
+            # Gaussian (normal) distribution centered around `num_exit // 2`
+            center = exit_ratio
+            std_dev = 1.0  # Arbitrary standard deviation to cover a significant range
+            probs = torch.tensor([math.exp(-(i - center) ** 2 / (2 * std_dev ** 2)) for i in range(real_num_exit)])
+        
+        elif self.exit_dist == 'gamma':
+            # Gamma distribution
+            x = torch.arange(1, real_num_exit + 1, dtype=torch.float32)
+            shape = exit_ratio
+            scale = 2.0
+            probs = torch.tensor([scipy.stats.gamma.pdf(val, shape, scale=scale) for val in x], dtype=torch.float32)
+        
+        else:
+            raise ValueError("Unsupported exit distribution")
+        
         probs /= probs.sum()
+        _probs = torch.zeros(self.num_exit)
+        _probs[:real_num_exit] = probs
+        probs = _probs
+        
         if args.rank==0: print('Expected early exit rate ', probs)
 
-        for k in range(n_stage - 1): # not include the last exit
+        for k in range(real_num_exit - 1): # not include the last exit
             count = 0
             out_n = math.floor(n_sample * probs[k])
             for i in range(n_sample):
@@ -806,8 +834,6 @@ class ExitController(torch.nn.Module):
         assert isinstance(i, int), 'index muast be integer'
         if i not in self.exit_id_list:
             return False
-        if i == self.exit_id_list[-1]:
-            return True
         
         # if still in a stage just use previous exit id
         if self.cur_step % self.steps_per_stage != 0:
@@ -816,6 +842,7 @@ class ExitController(torch.nn.Module):
         # else set a new exit id
         if isinstance(self.value_net, TimeValueNet) or isinstance(self.value_net, RandomValueNet):
             exit_flag = self.value_net(i)
+            exit_flag = exit_flag or i >= self.max_layer - 1
             if exit_flag:
                 # decide to early exit and execute action
                 self.cur_exit_id = i
@@ -839,7 +866,7 @@ class ExitController(torch.nn.Module):
         #         for layer, h in enumerate(self.history_values):
         #             print(f'{layer=}, count={len(h)}, mean value = {torch.tensor(h).mean():.5f}')
         
-        if bool(value <= self.thresholds[i]) is self.leq: # both be true or both be false
+        if bool(value <= self.thresholds[i]) is self.leq or i >= self.max_layer: # both be true or both be false
             if isinstance(self.value_net, LSTMValueHead):
                 # Already find the dynamic exit. We need to update hidden state
                 self.value_net.update_memory()
