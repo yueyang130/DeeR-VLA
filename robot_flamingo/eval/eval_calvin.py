@@ -421,17 +421,6 @@ def main():
         
     print(f'Model class : {args.llm_name}')
     
-    if args.early_exit_layer < 0:
-        if name == 'mpt_3b' or name == 'mpt_dolly_3b':
-            args.early_exit_layer += 24
-        elif name == 'mpt_9b':
-            args.early_exit_layer += 32
-        else:
-            raise NotImplementedError
-    if not args.max_layer:
-        args.max_layer = args.early_exit_layer
-        
-    
     args.lm_path = mpt_dict[args.llm_name]["lang_encoder_path"]
     args.tokenizer_path = mpt_dict[args.llm_name]["tokenizer_path"]
     args.cross_attn_every_n_layers = mpt_dict[args.llm_name]["cross_attn_every_n_layers"]
@@ -483,9 +472,20 @@ def main():
     readout_args(args, checkpoint, "use_layerwise_projection", False)
     readout_args(args, checkpoint, "num_projection_layers", 1)
     readout_args(args, checkpoint, "skip_connection", False)
+    
     if 'layernorm' in checkpoint: # for compatibility with old code
         args.mlp_layernorm = checkpoint['layernorm']
-    
+        
+    if args.early_exit_layer < 0:
+        if name == 'mpt_3b' or name == 'mpt_dolly_3b':
+            args.early_exit_layer += 24
+        elif name == 'mpt_9b':
+            args.early_exit_layer += 32
+        else:
+            raise NotImplementedError
+    if args.max_layer is None:
+        args.max_layer = args.early_exit_layer
+
     model, image_processor, tokenizer = create_model_and_transforms(
         args.vision_encoder_path,
         args.vision_encoder_pretrained,
