@@ -138,6 +138,8 @@ def get_ckpt_prefix(args, train_value=False):
         ckpt_name += 'multie_'
         if args.share_exit:
             ckpt_name += 'share_'
+        if args.no_auxiliary_action_head_loss:
+            ckpt_name += 'noloss_'
         if args.exit_weight != 'uniform':
             ckpt_name += f'{args.exit_weight}_'
         ckpt_name += 'intv={}_'.format(args.exit_interval)
@@ -1071,6 +1073,11 @@ def train_one_epoch_calvin_multi_exit(
             dim = loss_calvin.dim()
             loss_calvin = loss_calvin.mean(dim=tuple(range(1, dim)))
             weights = get_exit_weights(args.exit_weight, len(all_outputs), args.use_extra_exit, device=loss_calvin.device)
+            if args.no_auxiliary_action_head_loss:
+                if args.regularize_extra_exit:
+                    weights[:-2] = 0
+                else:
+                    weights[:-1] = 0
             if args.rank == 0 and num_steps <= 1:
                 print(weights)
             # print(loss_calvin)

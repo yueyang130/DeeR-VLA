@@ -142,9 +142,12 @@ ckpt_names = [
     # 'stg=post_4+5_layer_23_multie_intv=2_extrae_nodth_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_lwproj1L_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_lwproj2L_res_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
-    'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_lwproj1L_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_lwproj2L_res_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    
+    # D
+    'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    # 'stg=post_4+5_layer_11_multie_noloss_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     
     
     # original flamingo
@@ -153,7 +156,9 @@ ckpt_names = [
     # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
 
     # ABCD
-    'stg=post_3+3_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
+    # 'stg=post_3+3_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
+    # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_57500_iter.pth',
+    'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_60000_iter.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_57500_iter.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_55000_iter.pth',
@@ -162,6 +167,9 @@ ckpt_names = [
     
     # ABC
     'stg=post_4+4_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth',
+    
+    # 9B
+    'stg=post_4+4_layer_15_multie_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_9b_7.pth',
 ]
 
 

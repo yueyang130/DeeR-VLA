@@ -43,52 +43,11 @@ class FlamingoLayer(nn.Module):
     def condition_use_cached_media(self, use_cached_media):
         self.use_cached_media = use_cached_media
 
-    # def forward(
-    #     self,
-    #     lang_x,
-    #     attention_mask=None,
-    #     **decoder_layer_kwargs,
-    # ):
-    #     # Cross attention
-    #     if self.gated_cross_attn_layer is not None:
-    #         if self.vis_x is None:
-    #             raise ValueError("vis_x must be conditioned before forward pass")
-
-    #         if self.media_locations is None:
-    #             raise ValueError(
-    #                 "media_locations must be conditioned before forward pass"
-    #             )
-
-    #         lang_x = self.gated_cross_attn_layer(
-    #             lang_x,
-    #             self.vis_x,
-    #             media_locations=self.media_locations,
-    #             use_cached_media=self.use_cached_media,
-    #         )
-            
-    #         # Residual
-    #         if self.residual and self.res_layer is not None:
-    #             lang_x_res = self.res_layer(
-    #                 lang_x,
-    #                 self.vis_x,
-    #                 media_locations=self.media_locations,
-    #                 attend_previous=self.attend_previous,
-    #             )
-    #             lang_x = (lang_x + lang_x_res) / 2.0
-
-    #     # Normal decoder layer
-    #     lang_x = self.decoder_layer(
-    #         lang_x, attention_mask=attention_mask, **decoder_layer_kwargs
-    #     )
-    #     return lang_x
-
     def forward(
         self,
         lang_x,
-        past_key_value=None,
-        attn_bias=None,
         attention_mask=None,
-        is_causal: bool = True,
+        **decoder_layer_kwargs,
     ):
         # Cross attention
         if self.gated_cross_attn_layer is not None:
@@ -119,13 +78,54 @@ class FlamingoLayer(nn.Module):
 
         # Normal decoder layer
         lang_x = self.decoder_layer(
-            lang_x, 
-            past_key_value=past_key_value,
-            attn_bias=attn_bias,
-            attention_mask=attention_mask,
-            is_causal=is_causal
+            lang_x, attention_mask=attention_mask, **decoder_layer_kwargs
         )
         return lang_x
+
+    # def forward(
+    #     self,
+    #     lang_x,
+    #     past_key_value=None,
+    #     attn_bias=None,
+    #     attention_mask=None,
+    #     is_causal: bool = True,
+    # ):
+    #     # Cross attention
+    #     if self.gated_cross_attn_layer is not None:
+    #         if self.vis_x is None:
+    #             raise ValueError("vis_x must be conditioned before forward pass")
+
+    #         if self.media_locations is None:
+    #             raise ValueError(
+    #                 "media_locations must be conditioned before forward pass"
+    #             )
+
+    #         lang_x = self.gated_cross_attn_layer(
+    #             lang_x,
+    #             self.vis_x,
+    #             media_locations=self.media_locations,
+    #             use_cached_media=self.use_cached_media,
+    #         )
+            
+    #         # Residual
+    #         if self.residual and self.res_layer is not None:
+    #             lang_x_res = self.res_layer(
+    #                 lang_x,
+    #                 self.vis_x,
+    #                 media_locations=self.media_locations,
+    #                 attend_previous=self.attend_previous,
+    #             )
+    #             lang_x = (lang_x + lang_x_res) / 2.0
+
+    #     # Normal decoder layer
+    #     lang_x = self.decoder_layer(
+    #         lang_x, 
+    #         past_key_value=past_key_value,
+    #         attn_bias=attn_bias,
+    #         attention_mask=attention_mask,
+    #         is_causal=is_causal
+    #     )
+    #     return lang_x
 
 
 class FlamingoLMMixin(nn.Module):

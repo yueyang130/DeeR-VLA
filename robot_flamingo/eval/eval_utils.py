@@ -541,8 +541,7 @@ def evaluate_policy(model, env, epoch, calvin_conf_path, eval_log_dir=None, debu
     results = []
     plans = defaultdict(list)
 
-    if not debug:
-        eval_sequences = tqdm(eval_sequences, position=0, leave=True)
+    eval_sequences = tqdm(eval_sequences, position=0, leave=True)
 
     for initial_state, eval_sequence in eval_sequences:
         result = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, plans, debug)
@@ -603,8 +602,7 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
     base_sequence_i = device_id * interval_len
     n_layer = model.model.module.lang_encoder.config.n_layers
 
-    if not debug:
-        eval_sequences = tqdm(eval_sequences, position=0, leave=True)
+    eval_sequences = tqdm(eval_sequences, position=0, leave=True)
 
     for initial_state, eval_sequence in eval_sequences:
         result, success_seq_exit_layers, fail_seq_exit_layers, seq_success_task_steps = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, plans, debug, eval_log_dir, base_sequence_i+local_sequence_i, reset=reset, diverse_inst=diverse_inst)
@@ -740,15 +738,28 @@ def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug, eva
         current_task_info = task_oracle.get_task_info_for_set(start_info, current_info, {subtask})
         if len(current_task_info) > 0:
             if debug:
-                print(colored("success", "green"), end=" ")
-                img_clip = ImageSequenceClip(img_queue, fps=30)
-                img_clip.write_gif(os.path.join(eval_log_dir, f'{sequence_i}-{subtask_i}-{subtask}-succ.gif'), fps=30)
+                # print(colored("success", "green"), end=" ")
+                # img_clip = ImageSequenceClip(img_queue, fps=30)
+                # img_clip.write_gif(os.path.join(eval_log_dir, f'{sequence_i}-{subtask_i}-{subtask}-succ.gif'), fps=30)
+                save_screenshot_with_exit_info(img_queue, exit_layers, sequence_i, subtask_i, subtask, 'success', eval_log_dir)
             return True, exit_layers, step+1
     if debug:
-        print(colored("fail", "red"), end=" ")
-        img_clip = ImageSequenceClip(img_queue, fps=30)
-        img_clip.write_gif(os.path.join(eval_log_dir, f'{sequence_i}-{subtask_i}-{subtask}-fail.gif'), fps=30)
+        # print(colored("fail", "red"), end=" ")
+        # img_clip = ImageSequenceClip(img_queue, fps=30)
+        # img_clip.write_gif(os.path.join(eval_log_dir, f'{sequence_i}-{subtask_i}-{subtask}-fail.gif'), fps=30)
+         save_screenshot_with_exit_info(img_queue, exit_layers, sequence_i, subtask_i, subtask, 'fail', eval_log_dir)
     return False, exit_layers, step+1
+
+def save_screenshot_with_exit_info(images, exit_layers, seq_id, subtask_id, subtask, success, eval_log_dir, freq=5):
+    assert len(images) == len(exit_layers)
+    save_dir = os.path.join(eval_log_dir, f'{seq_id}-{subtask_id}-{subtask}-{success}')
+    os.makedirs(save_dir, exist_ok=True)
+    for t, (img, exit_id) in enumerate(zip(images, exit_layers)):
+        if len(images) < 15 or t % freq == 0:
+            img_path = os.path.join(save_dir, f'{t}_{exit_id}.jpg')
+            img2 = Image.fromarray(img, 'RGB')
+            # Save the image to a file
+            img2.save(img_path)
 
 def eval_one_epoch_calvin(args, model, dataset_path, image_processor, tokenizer, future_act_len=-1):
 

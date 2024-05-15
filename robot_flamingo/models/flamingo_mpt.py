@@ -471,7 +471,7 @@ class MPTFlamingo(nn.Module):
                     exit_head = self.lm_head
                 else:
                     exit_head = self.lm_exits[exit_id]
-            assert len(output.hidden_states) == exit_id + 1
+            assert len(output.hidden_states) == exit_id + 1, f'{len(output.hidden_states)}, {exit_id+1}'
             exit_action_output = get_action(exit_head, output.hidden_states[exit_id], state_tensor, layer_indices=exit_id)
             output.logits = exit_action_output
             return output

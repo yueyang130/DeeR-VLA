@@ -675,8 +675,8 @@ class RandomValueNet(BaseValueNet):
         self.max_step = max_step
         
         probs = exit_ratio ** torch.arange(1, len(exit_list)+1) # n (including the last exit)
-        # self.ratios = np.array(probs)
-        self.ratios = np.array([1, 1, 1, 1, 1, 1])   
+        self.ratios = np.array(probs)
+        # self.ratios = np.array([1, 1, 1, 1, 1, 1])   
         self.ratios =  self.ratios /  self.ratios.sum()
         
         self.repeat_step = int(steps_per_stage)
@@ -719,7 +719,7 @@ class ExitController(torch.nn.Module):
         # for debug
         # self.history_values = [[] for i in range(num_exit)]
         
-    def set_threshold(self, args, model, dataloader, exit_ratio, values=None):  
+    def set_threshold(self, args, model, dataloader, exit_ratio, model_name, values=None):  
         if values is None:  
             device_id = torch.distributed.get_rank()
             num_devices = torch.distributed.get_world_size()
@@ -776,6 +776,9 @@ class ExitController(torch.nn.Module):
         
         else:
             raise ValueError("Unsupported exit distribution")
+        
+        if 'mpt_9b' in model_name:
+            probs[0] = 0 # only enable exits from at least 4th layer for very deep model
         
         probs /= probs.sum()
         
@@ -963,6 +966,7 @@ def generate_sim_values(
                     vision_gripper=gripper,
                     state_tensor=state_tensor if (args.use_state or args.sep_lm_head) else None,
                     with_gripper_logits=True,
+                    only_extra_exit=True,
                 )
                 
                 # get joint outputs

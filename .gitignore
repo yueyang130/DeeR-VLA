@@ -40,3 +40,5 @@ void.py
 test*.py
 *.safetensors
 lm_src
+evaluate
+*.zip

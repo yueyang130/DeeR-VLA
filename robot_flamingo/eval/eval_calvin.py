@@ -442,7 +442,14 @@ def main():
     if args.rank == 0:
         print(f"Loading robot-flamingo checkpoint from {args.evaluate_from_checkpoint}")
     checkpoint = torch.load(args.evaluate_from_checkpoint, map_location="cpu")
-    
+
+    # save memory by deleting useless optimizer state from processes except the rank 0
+    try:
+        if args.rank != 0:
+            del checkpoint['optimizer_state_dict']
+            del checkpoint['lr_scheduler_state_dict']
+    except:
+        pass
     
     def readout_args(args, ckpt, name, default):
         if name in ckpt:
@@ -671,12 +678,12 @@ def main():
         calvin_loader = calvin_dataset.dataloader
         
         # find threshold
-        values = checkpoint['values'] if checkpoint and  "values" in checkpoint else None
-        if args.load_threshold and values is not None:
+        values = checkpoint['values'] if args.value_type == 'action' and checkpoint is not None and  "values" in checkpoint else None
+        if args.load_threshold and values is not None: # load cached value distribution
             print(f'load values for threshold')
-            ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, values)
+            ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name, values)
         else:
-            values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio)
+            values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name)
             
             checkpoint["values"] = values
             if args.rank==0: 
@@ -698,7 +705,7 @@ def main():
     
     eval_log_dir = None
     if args.visualize:
-        eval_log_dir = 'evaluate/{}'.format(args.evaluate_from_checkpoint.split('.')[0])
+        eval_log_dir = 'evaluate/{}_{}_{}_{}'.format(args.evaluate_from_checkpoint.split('.')[0], args.eval_exit_mode, args.value_type, args.exit_ratio, )
     eval_one_epoch_calvin_ddp(
         args=args,
         model=ddp_model,

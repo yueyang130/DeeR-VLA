@@ -357,6 +357,7 @@ def main():
     parser.add_argument("--num_projection_layers", type=int, default=1)
     parser.add_argument("--skip_connection", action="store_true", default=False)
     parser.add_argument("--feat_distill_coef", type=float, default=0.0, help='use feature distillation if coef is greater than 0')
+    parser.add_argument("--no_auxiliary_action_head_loss", action="store_true", default=False) # If true, only loss from the global exit head will be used.
     # for value net
     # parser.add_argument("--with_value_net", action="store_true", default=False, help='jointly train value net')
 
@@ -519,8 +520,9 @@ def main():
             if not only_head and is_head(n): # scale head lr only when joint training
                 lr_scale = args.exit_lr_scale
             elif not only_head: # scale transformer layers lr when joint training
-                layer_id = get_num_layer_for_flamingo(n, len(layerwsie_lr_scale_list), args.exit_interval)
-                lr_scale = layerwsie_lr_scale_list[layer_id]
+                # layer_id = get_num_layer_for_flamingo(n, len(layerwsie_lr_scale_list), args.exit_interval)
+                # lr_scale = layerwsie_lr_scale_list[layer_id]
+                lr_scale = 1.0
             else: # not scale when only train exit
                 lr_scale = 1.0
 
