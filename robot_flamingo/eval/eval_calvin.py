@@ -5,6 +5,7 @@ import glob
 import os
 import gc
 import re
+import time
 import random
 from robot_flamingo.eval.eval_utils import eval_one_epoch_calvin_ddp
 from torch.distributed.elastic.multiprocessing.errors import record
@@ -342,6 +343,8 @@ def main():
     parser.add_argument("--load_threshold", default=1, type=int)
     parser.add_argument("--num_seq", default=1000, type=int)
     
+    parser.add_argument("--thresholds", nargs='+', type=float, default=None, help="directly set thresholds API (for bayesian optimization)")
+    
     args = parser.parse_args()
     
     print(f'{args.amp=}')
@@ -491,7 +494,7 @@ def main():
         else:
             raise NotImplementedError
     if args.max_layer is None:
-        args.max_layer = args.early_exit_layer
+        args.max_layer = args.early_exit_layer + 1
 
     model, image_processor, tokenizer = create_model_and_transforms(
         args.vision_encoder_path,
@@ -679,16 +682,19 @@ def main():
         
         # find threshold
         values = checkpoint['values'] if args.value_type == 'action' and checkpoint is not None and  "values" in checkpoint else None
-        if args.load_threshold and values is not None: # load cached value distribution
-            print(f'load values for threshold')
-            ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name, values)
+        if not args.thresholds:
+            if args.load_threshold and values is not None: # load cached value distribution
+                print(f'load values for threshold')
+                ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name, values)
+            else:
+                values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name)
+                
+                checkpoint["values"] = values
+                if args.rank==0: 
+                    print("save new values for threshold to ckpt.")
+                    torch.save(checkpoint, args.evaluate_from_checkpoint)
         else:
-            values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name)
-            
-            checkpoint["values"] = values
-            if args.rank==0: 
-                print("save new values for threshold to ckpt.")
-                torch.save(checkpoint, args.evaluate_from_checkpoint)
+            ddp_exit_controller.module._set_threshold_value(args.thresholds)
                 
         del calvin_dataset
         del calvin_loader
@@ -706,7 +712,7 @@ def main():
     eval_log_dir = None
     if args.visualize:
         eval_log_dir = 'evaluate/{}_{}_{}_{}'.format(args.evaluate_from_checkpoint.split('.')[0], args.eval_exit_mode, args.value_type, args.exit_ratio, )
-    eval_one_epoch_calvin_ddp(
+    results = eval_one_epoch_calvin_ddp(
         args=args,
         model=ddp_model,
         image_processor=image_processor,
@@ -719,6 +725,17 @@ def main():
         diverse_inst=args.diverse_inst,
         exit_controller=ddp_exit_controller,
     )
+    
+    torch.distributed.barrier()
+    if args.rank == 0: 
+        time.sleep(20) # wait all output are written the log file
+        thresholds = ddp_exit_controller.module.thresholds
+        thresholds = map(float, thresholds.values())
+        threshold_str = ','.join(map(str, thresholds))
+        print(threshold_str) # threshold
+        print(results[0]) # avg len
+        print(results[1]) # avg exit
+    
 
 
 if __name__ == "__main__":

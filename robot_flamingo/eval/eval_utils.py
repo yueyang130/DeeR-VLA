@@ -135,6 +135,8 @@ def print_and_save(results, success_exit_results, fail_exit_results, step_result
         f"Best model: epoch {max(json_data, key=lambda x: json_data[x]['avg_seq_len'])} "
         f"with average sequences length of {max(map(lambda x: x['avg_seq_len'], json_data.values()))}"
     )
+    
+    return avg_seq_len, np.mean(success_exit_results)+1
 
 
 def get_cast_dtype(precision: str):
@@ -634,10 +636,10 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
         
         res_list, success_exit_list, fail_exit_list, step_list, eval_seq_list = map(list, zip(*res_tup_list))
 
-        print_and_save(res_list, merge_multi_list(success_exit_list),merge_multi_list(fail_exit_list), 
+        ret = print_and_save(res_list, merge_multi_list(success_exit_list),merge_multi_list(fail_exit_list), 
                        merge_multi_list(step_list), eval_seq_list, eval_log_dir, n_layer, epoch)
 
-    return results
+        return ret
 
 
 def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, val_annotations, plans, debug, eval_log_dir='', sequence_i=-1, reset=False, diverse_inst=False):
@@ -786,7 +788,7 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
             if args.use_extra_exit:
                 print("\nEvaluate the extra exit with features from the last layer !\n")
         wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
-        evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
+        results = evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
         
     elif args.eval_exit_mode == 'all':
         torch.distributed.barrier()
@@ -799,16 +801,18 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
             # if exit_id == 11: continue
             if args.rank == 0: print('#'*40 + '\n' + f'Evaluate the exit with exit_id={exit_id}!\n' + '#'*40 + '\n')
             wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
-            evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
+            results = evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
             torch.distributed.barrier() # don't conduct next eval until all threads reach
     
     elif args.eval_exit_mode == 'dynamic':
         if args.rank == 0: print("\nEvaluate with dynamic exit!\n")
         wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, early_exit=True, exit_controller=exit_controller, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
-        evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
+        results = evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
 
     else:
         raise NotImplementedError
+    
+    return  results
 
 def main():
     seed_everything(0, workers=True)  # type:ignore

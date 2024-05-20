@@ -1,4 +1,5 @@
 import torch
+import torch.distributed
 import torch.nn as nn
 import torch.nn.functional as F
 from robot_flamingo.models.action_head import MLPNohHead, MLPNohHeadLight, lstm_decoder
@@ -718,6 +719,14 @@ class ExitController(torch.nn.Module):
         self.max_layer = min(max_layer - 1, self.exit_id_list[-1])
         # for debug
         # self.history_values = [[] for i in range(num_exit)]
+        
+    def _set_threshold_value(self, thresholds):
+        real_num_exit = len([x for x in self.exit_id_list if x <= self.max_layer])
+        assert len(thresholds) == real_num_exit
+        self.thresholds = {self.exit_id_list[i] : thresholds[i]  for i in range(real_num_exit)}
+        if torch.distributed.get_rank() == 0:
+            print('setting thresholds, ', thresholds)
+        
         
     def set_threshold(self, args, model, dataloader, exit_ratio, model_name, values=None):  
         if values is None:  
