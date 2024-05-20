@@ -15,35 +15,38 @@ parser.add_argument("--evaluate_from_checkpoint", type=str)
 parser.add_argument("--acq_func", type=str, default='EI', choices=['EI', 'LCB', 'PI'])
 parser.add_argument('--n_calls', type=int)
 parser.add_argument('--init_exit_ratio', type=float)
+parser.add_argument('--seed', type=int, default=0)
+parser.add_argument('--port', type=int)
 args = parser.parse_args()
 
 
 ckpt_dir, ckpt_name = os.path.split(args.evaluate_from_checkpoint)
 iter_num = 0
-log_file = 'log_BO/' +  ckpt_dir + ckpt_name[:-4] + f'_iter{str(iter_num)}' + '.log'
+log_file = 'log_BO/' + f'seq{args.num_seq}_{args.acq_func}_seed{args.seed}_' + ckpt_dir + ckpt_name[:-4] + f'_iter{str(iter_num)}' + '.log'
 print(f'{log_file=}')
 
-# solve thresholds with exp distribution with a validation datast
-# os.system(f"""
-#     torchrun --nnodes=1 --nproc_per_node=$ARNOLD_WORKER_GPU  --master_port=$METIS_WORKER_0_PORT robot_flamingo/eval/eval_calvin.py \
-#     --precision fp32 \
-#     --use_gripper \
-#     --window_size 12 \
-#     --fusion_mode post \
-#     --run_name RobotFlamingoDBG \
-#     --calvin_dataset /mnt/bn/yueyang/archive/calvin/dataset/task_D_D \
-#     --cross_attn_every_n_layers 4 \
-#     --evaluate_from_checkpoint {args.evaluate_from_checkpoint} \
-#     --calvin_conf_path /mnt/bn/yueyang/archive/calvin/calvin_models/conf \
-#     --amp true \
-#     --eval_exit_mode dynamic \
-#     --exit_ratio {args.init_exit_ratio} \
-#     --value_type action \
-#     --threshold_type L2 --exit_dist exp \
-#     --num_seq {args.num_seq} \
-#     --validation_set \
-#     --workers 1 > {log_file} 2>&1
-# """)
+# solve thresholds with exp distribution with a validation datast to get init point
+if not os.path.exists(log_file):
+    os.system(f"""
+        torchrun --nnodes=1 --nproc_per_node=$ARNOLD_WORKER_GPU  --master_port={args.port} robot_flamingo/eval/eval_calvin.py \
+        --precision fp32 \
+        --use_gripper \
+        --window_size 12 \
+        --fusion_mode post \
+        --run_name RobotFlamingoDBG \
+        --calvin_dataset /mnt/bn/yueyang/archive/calvin/dataset/task_D_D \
+        --cross_attn_every_n_layers 4 \
+        --evaluate_from_checkpoint {args.evaluate_from_checkpoint} \
+        --calvin_conf_path /mnt/bn/yueyang/archive/calvin/calvin_models/conf \
+        --amp true \
+        --eval_exit_mode dynamic \
+        --exit_ratio {args.init_exit_ratio} \
+        --value_type action \
+        --threshold_type L2 --exit_dist exp \
+        --num_seq {args.num_seq} \
+        --validation_set \
+        --workers 1 > {log_file} 2>&1
+    """)
     
 with open(log_file, 'r') as file:
     lines = file.readlines()
@@ -75,7 +78,7 @@ def objective_function(t0, t1, t2, t3, t4):
     t5 = 100000.0
     if not os.path.exists(log_file):
         os.system(f"""
-        torchrun --nnodes=1 --nproc_per_node=$ARNOLD_WORKER_GPU  --master_port=$METIS_WORKER_0_PORT robot_flamingo/eval/eval_calvin.py \
+        torchrun --nnodes=1 --nproc_per_node=$ARNOLD_WORKER_GPU  --master_port={args.port} robot_flamingo/eval/eval_calvin.py \
         --precision fp32 \
         --use_gripper \
         --window_size 12 \
@@ -122,7 +125,7 @@ result = gp_minimize(
     x0=init_thresholds[:-1], 
     y0=init_avg_len, 
     n_calls=20, 
-    random_state=0
+    random_state=args.seed
 )
 
 print("Optimal thresholds:", result.x)
