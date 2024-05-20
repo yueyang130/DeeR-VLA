@@ -19,8 +19,8 @@ args = parser.parse_args()
 
 
 ckpt_dir, ckpt_name = os.path.split(args.evaluate_from_checkpoint)
-log_file = 'log_BO/' +  ckpt_dir + ckpt_name[:-4] + '.log'
 iter_num = 0
+log_file = 'log_BO/' +  ckpt_dir + ckpt_name[:-4] + f'_iter{str(iter_num)}' + '.log'
 print(f'{log_file=}')
 
 # solve thresholds with exp distribution with a validation datast
@@ -71,7 +71,7 @@ def objective_function(t0, t1, t2, t3, t4):
     global log_file
     global iter_num
     iter_num += 1
-    log_file  = log_file[:-4] + f'_iter{str(iter_num)}' + '.log'
+    log_file  = log_file[:-10] + f'_iter{str(iter_num)}' + '.log'
     t5 = 100000.0
     if not os.path.exists(log_file):
         os.system(f"""
