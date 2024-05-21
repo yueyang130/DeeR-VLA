@@ -147,7 +147,7 @@ ckpt_names = [
     
     # D
     'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
-    # 'stg=post_4+5_layer_11_multie_noloss_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    'stg=post_4+5_layer_11_multie_noloss_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     
     
     # original flamingo
