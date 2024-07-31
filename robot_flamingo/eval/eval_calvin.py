@@ -264,8 +264,8 @@ def main():
     )
     parser.add_argument(
         "--diverse_inst",
-        default=False,
-        action="store_true"
+        type=int,
+        default=0,
     )
     parser.add_argument(
         "--residual",

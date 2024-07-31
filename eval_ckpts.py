@@ -27,6 +27,9 @@ parser.add_argument("--threshold_type", type=str, default='mean', choices=['mean
 parser.add_argument("--exit_dist", type=str, default='exp', choices=['exp', 'gauss', 'gamma']) 
 parser.add_argument("--use_action_ensemble", type=int, default=0)
 parser.add_argument("--max_layer", type=int) # use for constraining memory/max flop. 
+
+parser.add_argument('--enrich_annotation', type=int, default=0, help='If set, eval in enriched annotation setting')
+
 parser.add_argument("--note", type=str, default='')
 
 
@@ -155,6 +158,7 @@ ckpt_names = [
     # 'checkpoint_gripper_post_hist_1__exit_layer_11_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth', 
     # 'checkpoint_gripper_post_hist_1__exit_layer_5_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth4.pth',
 
+
     # ABCD
     # 'stg=post_3+3_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_57500_iter.pth',
@@ -191,6 +195,8 @@ for ckpt_name in ckpt_names:
         log_dir = f'log_{args.ckpt_dir}'
         os.makedirs(log_dir, exist_ok=True)
         prefix = f'evaluate{args.num_seq}{args.note}'
+        if args.enrich_annotation:
+            prefix += '_enrich'
         if args.layerwise_exit_eval:
             prefix += '_per_exit'
         if args.amp:
@@ -231,6 +237,7 @@ for ckpt_name in ckpt_names:
         # print('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {}'.format(ckpt_path, log_file, use_gripper, use_state))
         # exit(0)
 
-        os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, 
-            use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode, args.multi_execution, value_net_ckpt_path, r, args.layerwise_exit_eval, args.value_type, args.num_seq, args.threshold_type, args.use_action_ensemble, args.exit_dist, args.max_layer))
+        os.system('bash robot_flamingo/pt_eval_ckpts.bash {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}'.format(ckpt_path, log_file, use_gripper, 
+            use_state, fusion_mode, window_size, args.node_num, args.single_step, args.amp, args.eval_exit_mode, args.multi_execution, value_net_ckpt_path, r, 
+            args.layerwise_exit_eval, args.value_type, args.num_seq, args.threshold_type, args.use_action_ensemble, args.exit_dist, args.max_layer, args.enrich_annotation))
 

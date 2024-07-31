@@ -584,6 +584,7 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
     if diverse_inst:
         with open('./lang_annotation_cache.json', 'r') as f:
             val_annotations = json.load(f)
+            print('Enable enriched annotation eval!')
     else:
         val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
 
