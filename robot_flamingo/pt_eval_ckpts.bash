@@ -35,6 +35,7 @@ use_action_ensemble=${18}
 exit_dist=${19}
 max_layer=${20}
 diverse_inst=${21}
+precision=${22}
 
 export MESA_GL_VERSION_OVERRIDE=4.1
 echo logging to ${log_file}
@@ -52,7 +53,7 @@ PORT=$((RANDOM % 16383 + 49152))
 if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 1 ]
 then
 torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flamingo/eval/$script \
-    --precision fp32 \
+    --precision ${precision} \
     --use_gripper \
     --use_state \
     --diverse_inst ${diverse_inst} \
@@ -74,7 +75,7 @@ fi
 if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 0 ]
 then
 torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flamingo/eval/$script \
-    --precision fp32 \
+    --precision ${precision} \
     --use_gripper \
     --diverse_inst ${diverse_inst} \
     --window_size ${window_size} \
@@ -101,7 +102,7 @@ fi
 if [ ${use_gripper} -eq 0 ] && [ ${use_state} -eq 0 ]
 then
 torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flamingo/eval/$script \
-    --precision fp32 \
+    --precision ${precision} \
     --diverse_inst ${diverse_inst} \
     --run_name RobotFlamingoDBG \
     --window_size ${window_size} \

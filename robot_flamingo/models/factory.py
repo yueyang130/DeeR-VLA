@@ -303,6 +303,9 @@ def create_model_and_transforms(
             )
 
         print(
+            f"Flamingo model initialized with {sum(p.numel() for p in model.parameters())/1e6:.2f}M parameters"
+        )
+        print(
             f"Flamingo model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)/1e6:.2f}M trainable parameters"
         )
         if hasattr(model, 'extra_exit'):

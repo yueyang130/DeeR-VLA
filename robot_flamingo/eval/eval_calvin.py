@@ -322,8 +322,8 @@ def main():
     
     parser.add_argument(
         "--amp",
-        default=False,
-        type=bool, help="enable amp during inference",
+        default=0,
+        type=int, help="enable amp during inference",
     )
     
     # multi-exit eval
@@ -346,8 +346,10 @@ def main():
     parser.add_argument("--thresholds", nargs='+', type=float, default=None, help="directly set thresholds API (for bayesian optimization)")
     
     args = parser.parse_args()
+    args.amp = bool(args.amp)
     
     print(f'{args.amp=}')
+    print(f'{args.precision=}')
     print(f'{args.eval_exit_mode=}')
     print(f'{args.load_threshold=}')
     print(f'{args.layerwise_exit_eval=}')
@@ -467,7 +469,7 @@ def main():
     readout_args(args, checkpoint, 'tanh_squash_dist', False)
     readout_args(args, checkpoint, 'state_dependent_std', False)
     readout_args(args, checkpoint, 'early_exit_layer', -1)
-    readout_args(args, checkpoint, "precision", 'fp32')
+    # readout_args(args, checkpoint, "precision", 'fp32')
     readout_args(args, checkpoint, "multi_exit", False)
     readout_args(args, checkpoint, "use_extra_exit", False)
     readout_args(args, checkpoint, "exit_interval", 1)
@@ -493,7 +495,7 @@ def main():
             args.early_exit_layer += 32
         else:
             raise NotImplementedError
-    if args.max_layer is None:
+    if args.max_layer is None or args.max_layer == -1:
         args.max_layer = args.early_exit_layer + 1
 
     model, image_processor, tokenizer = create_model_and_transforms(
