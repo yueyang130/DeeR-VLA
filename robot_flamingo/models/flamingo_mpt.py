@@ -12,6 +12,7 @@ from fvcore.nn import FlopCountAnalysis
 from thop import profile
 from contextlib import suppress
 import random
+import numpy as np
 
 class MPTFlamingo(nn.Module):
     def __init__(
@@ -279,8 +280,9 @@ class MPTFlamingo(nn.Module):
             if not self.layerwise_exit_eval:
                 print('eval the extra exit!') 
             else:
-                print('eval layerwise exits!')    
-        
+                print('eval layerwise exits!') 
+
+        self.llm_inference_time = -1.0
         
     def get_all_exit_idx(self):
         # not include the extra exit
@@ -347,7 +349,7 @@ class MPTFlamingo(nn.Module):
         return_in_feat=False,
         return_aggregate_feature=False,
         only_extra_exit=False,
-        eval_time=False,
+        eval_time=True,
         no_backbone_grad=False,
     ):
         """
@@ -431,7 +433,13 @@ class MPTFlamingo(nn.Module):
 
         if eval_time:
             torch.cuda.synchronize()
-            print(f"LLM total time: {time.time()-cur_time:.4f} seconds")
+            llm_time = time.time()-cur_time
+            # print(f"LLM total time: {llm_time:.4f} seconds")
+            self.llm_inference_time = llm_time
+            # if len(self.llm_inference_time_list) > 1000:
+            #     print('AVG LLM INFERENCE TIME: ', np.mean(self.llm_inference_time_list))
+            #     exit()
+            
         
         def get_action(head, in_feat, in_state, return_aggregate_feature=False, eval_flop=False, layer_indices=None):
             
@@ -450,7 +458,7 @@ class MPTFlamingo(nn.Module):
             
             if eval_time:
                 torch.cuda.synchronize()
-                print(f"action head time: {time.time()-cur_time:.4f} seconds")
+                # print(f"action head time: {time.time()-cur_time:.4f} seconds")
                 cur_time = time.time()
             return o
         
