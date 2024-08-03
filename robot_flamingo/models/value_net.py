@@ -759,6 +759,7 @@ class ExitController(torch.nn.Module):
             pred_value_gathered = values
             
         n_stage, n_sample = pred_value_gathered.size() # (exit, bs * seq_length)
+
         _, sorted_idx = pred_value_gathered.sort(dim=1, descending=not self.leq)
 
         filtered = torch.zeros(n_sample)
@@ -982,11 +983,26 @@ def generate_sim_values(
                 all_outputs = exit_outputs + [final_output.logits]
 
         feats = final_output.hidden_states # n_exit x (bs * action_seq_len, lang_len, d)
+        
+        # similarity between two adjacent exits 
         sim = value_net(feats, mode='generate')
+
+        # # similarity between the current exit and the last exit
+        # feats = feats[::args.exit_interval]
+        # last_exit_feat = feats[-1].unsqueeze(0)
+        # all_feats = torch.stack(feats, dim=0)
+        # # Implementation1:
+        # sim = get_similarity(all_feats, last_exit_feat).mean(-1) # n_exit x (bs * action_seq_len)
+        # # Implementation2:
+        # last_exit_feat = torch.max(last_exit_feat, dim=-2)[0] # 1 x (bs * action_seq_len, d)
+        # all_feats = torch.max(all_feats, dim=-2)[0] # n_exit x (bs * action_seq_len, d)
+        # sim = get_similarity(all_feats, last_exit_feat) # n_exit x (bs * action_seq_len)
+
         # record
         pred_value_list.append(sim)  
 
     pred_value_list = torch.cat(pred_value_list, dim=1)
+    print(pred_value_list.shape)
     # pred_value_list = pred_value_list.flatten(1, 2)
         
     # return pred_value_list, target_value_list
@@ -1090,6 +1106,7 @@ def generate_action_values(
         feats = final_output.hidden_states # n_exit x (bs * action_seq_len, lang_len, d)
         rand_layer_feat = rand_layer_feat # (bs * action_seq_len, lang_len, d)
         sim = value_net(feats, mode='generate', rand_layer_feat=rand_layer_feat)
+        
         # record
         pred_value_list.append(sim)  
 

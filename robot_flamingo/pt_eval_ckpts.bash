@@ -96,7 +96,8 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --use_action_ensemble ${use_action_ensemble} \
     --num_seq ${num_seq} \
     --validation_set \
-    --workers 1 > ${log_file} 2>&1
+    --workers 1 
+    # --workers 1 > ${log_file} 2>&1
 fi
 
 if [ ${use_gripper} -eq 0 ] && [ ${use_state} -eq 0 ]

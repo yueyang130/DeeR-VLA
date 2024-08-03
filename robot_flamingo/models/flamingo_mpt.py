@@ -349,7 +349,7 @@ class MPTFlamingo(nn.Module):
         return_in_feat=False,
         return_aggregate_feature=False,
         only_extra_exit=False,
-        eval_time=True,
+        eval_time=False,
         no_backbone_grad=False,
     ):
         """
