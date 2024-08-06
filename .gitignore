@@ -42,3 +42,4 @@ test*.py
 lm_src
 evaluate
 *.zip
+*.bin

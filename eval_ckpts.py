@@ -155,9 +155,10 @@ ckpt_names = [
     # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_lwproj2L_res_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     
     # D
-    'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
-    # 'stg=post_4+5_layer_11_multie_noloss_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
-    
+    # 'stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    'stg=post_4+5_layer_11_multie_noloss_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
+    'stg=post_4+5_layer_11_multie_noloss_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_freeze_emb_7.pth',
+
     # D L24
     'stg=post_4+5_layer_23_multie_intv=2_extrae_nodth_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth',
     
@@ -170,12 +171,11 @@ ckpt_names = [
     # ABCD
     # 'stg=post_3+3_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
     # 'stg=post_3+3_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
-    # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_57500_iter.pth',
-    'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
+    # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_60000_iter.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_57500_iter.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_55000_iter.pth',
-    
+    'stg=post_3+0_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_state_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
 
     
     # ABC
@@ -228,6 +228,8 @@ for ckpt_name in ckpt_names:
             log_file = '{}/{}_{}.log'.format(log_dir, prefix, ckpt_name[:-30]+iter)
         else:
             log_file = '{}/{}_{}.log'.format(log_dir, prefix, os.path.basename(value_net_ckpt_path)[:30]+os.path.basename(value_net_ckpt_path)[-2:])
+        if 'freeze_emb' in ckpt_name:
+            log_file = log_file[:-4] + '_freeze_emb.log'
         if os.path.exists(log_file): 
             print(f'skip {log_file}')
             continue

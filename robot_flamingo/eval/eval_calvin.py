@@ -358,7 +358,8 @@ def main():
         args.batch_size_calvin = 32
     else:
         args.batch_size_calvin = 16
-    
+    if 'state' in args.evaluate_from_checkpoint:
+        args.use_state = True
     args.real_data = True if 'real' in args.evaluate_from_checkpoint else False
     # Search for the pattern in args.evaluate_from_checkpoint
     match = re.search(r'aug_(\d+)_(\d+)', args.evaluate_from_checkpoint)
@@ -691,10 +692,10 @@ def main():
             else:
                 values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name)
                 
-                # checkpoint["values"] = values
-                # if args.rank==0: 
-                #     print("save new values for threshold to ckpt.")
-                #     torch.save(checkpoint, args.evaluate_from_checkpoint)
+                checkpoint["values"] = values
+                if args.rank==0: 
+                    print("save new values for threshold to ckpt.")
+                    torch.save(checkpoint, args.evaluate_from_checkpoint)
         else:
             ddp_exit_controller.module._set_threshold_value(args.thresholds)
                 
