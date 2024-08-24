@@ -175,7 +175,10 @@ ckpt_names = [
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_60000_iter.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_57500_iter.pth',
     # 'stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_55000_iter.pth',
-    'stg=post_3+0_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_state_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
+    # use tstate (seemd wrong and indeed don't use state)
+    # 'stg=post_3+0_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_state_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
+    # no multiexit auxiliary loss
+    'stg=post_3+0_layer_23_multie_noloss_intv=2_extrae_nodth_reg_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth',
 
     
     # ABC

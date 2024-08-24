@@ -766,6 +766,21 @@ class DeterministicDecoder(ActionDecoder):
         
         input_feature = input_feature.reshape(-1, cur_window_size, input_feature.shape[1]) # (bs, seq_len, d)
         
+        if self.use_state:
+            # print('use_state, ', state_tensor.shape)
+            arm_state = state_tensor[..., :6] # b,len,state_dim-1
+            arm_state_embeddings = self.embed_arm_state(arm_state)
+            arm_state_embeddings = arm_state_embeddings.view(-1, self.window_size, arm_state_embeddings.shape[-1]) # b,len,h
+            gripper_state = ((state_tensor[..., -1]+1.0) / 2).long() # b,len,1
+            gripper_state_embeddings = self.embed_gripper_state(gripper_state)
+            gripper_state_embeddings = gripper_state_embeddings.view(-1, self.window_size, gripper_state_embeddings.shape[-1]) # b,len,h
+            state_embeddings = torch.cat((arm_state_embeddings, gripper_state_embeddings), dim=2) # b,len,2h
+            state_embeddings = self.embed_state(state_embeddings) # b,len,h
+
+            # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
+            input_feature = input_feature + state_embeddings
+        
+
         if self.return_feature:
             # org_feat = copy.deepcopy(input_feature)
             org_feat = input_feature
