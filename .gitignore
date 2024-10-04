@@ -43,3 +43,5 @@ lm_src
 evaluate
 *.zip
 *.bin
+
+!arnold_before.sh
