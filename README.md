@@ -2,11 +2,16 @@
 <!-- markdownlint-disable html -->
 
 <div align="center">
-  <!-- <img src="assets/images/roboflamingo.svg" width="65%"/> -->
-  <img src="assets/images/roboflamingo.svg" width="80%"/>
+  <img src="assets/images/deer.png" width="30%"/>
 </div>
+<!-- <div align="center">
+  <img src="assets/images/icon-name.png" width="80%"/>
+</div> -->
 
-<h1 align="center">Vision-Language Foundation Models as Effective Robot Imitators</h1>
+<h1 align="center">DeeR-VLA: Dynamic Inference of Multimodal Large Language Models for Efficient Robot Execution
+</h1>
+
+
 
 ![Python 3.8](https://img.shields.io/badge/Python-3.8-blue)
 [![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/abs/2311.01378)

@@ -497,6 +497,7 @@ class MPTFlamingo(nn.Module):
                 exit_outputs.append(exit_action_output)
             
         
+        # Learning with an arbitrary size of models
         if self.use_extra_exit:
             all_feats = torch.stack(output.hidden_states, dim=1) # (bs * action_seq_len, n_exit, lang_len, d)
             # (bs * action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, n_exit, lang_len, d)
@@ -506,14 +507,12 @@ class MPTFlamingo(nn.Module):
             exit_ids = self.get_all_exit_idx()
             exit_num = self.get_exit_num()
             
-            # use features from random layers as LSTM input
-            # rand_layer_indices = torch.randint(0, n_exit, size=(bs, action_seq_len, 1, 1, 1), device=all_feats.device)
+            # Sampling Strategy 1
             indices = torch.randint(0, exit_num, size=(bs, action_seq_len), device=all_feats.device)
             in_indices1 = rand_layer_indices = torch.tensor([exit_ids[idx] for idx in indices.reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len)
             
             rand_layer_indices = rand_layer_indices.reshape(bs, action_seq_len, 1, 1, 1).expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
             rand_layer_feat = torch.gather(all_feats, 2, rand_layer_indices).squeeze(2)     
-            # if not only_extra_exit:
             # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
             rand_layer_feat = rand_layer_feat.flatten(0, 1)
             extra_exit_output = get_action(self.extra_exit, 
@@ -522,14 +521,13 @@ class MPTFlamingo(nn.Module):
                                             layer_indices=in_indices1
                                             )
             
-            # use features from two layers as LSTM input
+           # Sampling Strategy 2
             prev_len = random.randint(1, action_seq_len)
             indices = torch.randint(0, exit_num, size=(bs, 2), device=all_feats.device)
             indices_list = [indices[:, 0] for _ in range(prev_len)] + [indices[:, 1] for _ in range(action_seq_len-prev_len)]
             in_indices2 = indices = torch.tensor([exit_ids[idx] for idx in torch.stack(indices_list, dim=1).reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len)
             indices = indices.reshape(bs, action_seq_len, 1, 1, 1).expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
             two_layer_feat = torch.gather(all_feats, 2, indices).squeeze(2)     
-            # if not only_extra_exit:
             # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
             two_layer_feat = two_layer_feat.flatten(0, 1)
             extra_exit_output2 = get_action(self.extra_exit, 
@@ -538,34 +536,7 @@ class MPTFlamingo(nn.Module):
                                             layer_indices=in_indices2
                                             )
             
-            
-                # extra_exit_output = get_action(self.extra_exit, rand_layer_feat, state_tensor)
-            # else:
-            #     # we only get the predicted values at the t timestep with input feature from all layers.
-            #     all_layer_feat = []
-            #     for t in range(self.window_size):
-            #         all_layer_feat_t = []
-            #         for i in range(len(self.lm_exits)+1):
-            #             rand_layer_feat_i = rand_layer_feat # (bs, action_seq_len, lang_len, d)
-            #             rand_layer_feat_i[:, t] = all_feats[:, t, i] # (bs, action_seq_len, n_exit, lang_len, d)
-            #             all_layer_feat_t.append(rand_layer_feat_i)
-            #         all_layer_feat.append(torch.stack(all_layer_feat_t, dim=0))  # (n_exit, bs, action_seq_len, lang_len, d)
-            #     rand_layer_feat = torch.stack(all_layer_feat, dim=0)  # (action_seq_len, n_exit, bs, action_seq_len, lang_len, d)
-                
-            #     # input_feat = rand_layer_feat.flatten(2, 3).flatten(0, 1).detach()
-            #     input_feat = rand_layer_feat.flatten(2, 3).flatten(0, 1)
-            #     extra_exit_output = get_action(self.extra_exit, input_feat, state_tensor, return_aggregate_feature=return_aggregate_feature) # (action_seq_len * exits * bs, seq_len)
-                
-                # def get_output(x):
-                #     x = x.reshape(action_seq_len, len(self.lm_exits)+1, bs, action_seq_len, -1)
-                #     x = [x[i, :, :, i:i+1]  for i in range(action_seq_len)] # action_seq_len * (exit_num, bs, 1)
-                #     x = torch.cat(x, dim=2) #  (exit_num, bs, action_seq_len)
-                #     return x
-                # extra_exit_output = (
-                #     get_output(extra_exit_output[0]), 
-                #     (get_output(extra_exit_output[1][0]),  get_output(extra_exit_output[1][1])),
-                #     get_output(extra_exit_output[2]), 
-                # )
+    
             
             if return_in_feat:
                 return output, exit_outputs, extra_exit_output, rand_layer_feat, rand_layer_indices[:, :, 0, 0, 0]
