@@ -9,7 +9,6 @@ import PIL.Image as Image
 import copy
 import math
 from collections import deque
-from moviepy.editor import ImageSequenceClip
 import torch
 # from thop import profile
 from fvcore.nn import FlopCountAnalysis

@@ -48,7 +48,7 @@ python3 setup.py egg_info
 pip3 install -e .
 
 # reinstall torchaudio
-pip uninstall torch torchaudio
+pip uninstall torch torchaudio torchvision -y
 # sudo pip uninstall pytorch-lightning -y
 pip install torchaudio==0.13.1
 # pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu118
@@ -105,15 +105,16 @@ pip install scikit-optimize
 pip install bitsandbytes accelerate
 
 # SimplerEnv
-echo "export XDG_RUNTIME_DIR=/run/user/$(id -u)" >> ~/.bashrc
-sudo apt-get install libvulkan1
-sudo apt-get install vulkan-tools
-sudo apt-get install libglvnd-dev
+# echo "export XDG_RUNTIME_DIR=/run/user/$(id -u)" >> ~/.bashrc
+# sudo apt-get install libvulkan1
+# sudo apt-get install vulkan-tools
+# sudo apt-get install libglvnd-dev
 
-mkdir -p /usr/share/vulkan/icd.d
-cd /usr/share/vulkan/icd.d
-sudo wget  https://raw.githubusercontent.com/haosulab/ManiSkill/main/docker/nvidia_icd.json
-sudo wget -q -O /usr/share/glvnd/egl_vendor.d/10_nvidia.json https://raw.githubusercontent.com/haosulab/ManiSkill/main/docker/10_nvidia.json
+# mkdir -p /usr/share/vulkan/icd.d
+# cd /usr/share/vulkan/icd.d
+# sudo wget  https://raw.githubusercontent.com/haosulab/ManiSkill/main/docker/nvidia_icd.json
+# sudo wget -q -O /usr/share/glvnd/egl_vendor.d/10_nvidia.json https://raw.githubusercontent.com/haosulab/ManiSkill/main/docker/10_nvidia.json
+
 # cd /mnt/bn/yueyang/SimplerEnv
 # cd ManiSkill2_real2sim/
 # pip install -e .
