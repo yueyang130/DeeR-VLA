@@ -45,3 +45,4 @@ evaluate
 *.bin
 
 !arnold_before.sh
+!run*.sh
