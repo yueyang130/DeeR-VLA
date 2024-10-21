@@ -159,20 +159,6 @@ def create_model_and_transforms(
             lang_encoder_path, local_files_only=use_local_files, trust_remote_code=True
         )
 
-        # print(lang_encoder_path)
-        # if llm_name == 'llama':
-        #     lang_encoder = AutoModelForCausalLM.from_pretrained(
-        #     lang_encoder_path, local_files_only=use_local_files
-        # )
-        # else:
-        #     # name = 'mosaicml/mpt-7b'
-        #     config = {
-        #         "model_type": "auto",
-        #         "add_lm_head": True,
-        #     }
-        #     lang_encoder = AutoModelForCausalLM.from_pretrained(
-        #         lang_encoder_path, local_files_only=use_local_files
-        #     )
     # hacks for MPT-1B, which doesn't have a get_input_embeddings method
     if "mpt-1b-redpajama-200b" in lang_encoder_path:
 
@@ -194,9 +180,6 @@ def create_model_and_transforms(
     if decoder_layers_attr_name is None:
         decoder_layers_attr_name = _infer_decoder_layers_attr_name(lang_encoder)
     lang_encoder.set_decoder_layers_attr_name(decoder_layers_attr_name)
-    # print(lang_encoder.base_model_prefix)
-    # print(getattr(lang_encoder, lang_encoder.base_model_prefix, lang_encoder))
-    # print(lang_encoder)
     lang_encoder.resize_token_embeddings(len(text_tokenizer))
     
     if 'llama' in llm_name:

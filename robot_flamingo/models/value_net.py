@@ -121,8 +121,7 @@ class ActionValueNet(BaseValueNet):
             assert i > 0, 'the first layer similarity is not implemented yet'
             if i > 0 and i - self.interval < 0:
                 # since we don't have an action before the first action, we can
-                # 1. produce pseudo action using previous layer's feature
-                # 2. using gripper confidence
+                # produce pseudo action using previous layer's feature
                 prev_action = self.exit_head(feats[i-1], update_hidden_state=False)
             else:
                 prev_action = self.action_list[-1]
@@ -261,14 +260,6 @@ class ExitController(torch.nn.Module):
             T[real_num_exit - 1] = 1e8
         else:
             T[real_num_exit - 1] = -1e8
-        
-        # verify
-        # count = [0]
-        # filtered = torch.zeros(n_sample)
-        # for k in range(n_stage):
-        #     filtered += pred_value_gathered[k] < T[k]
-        #     count.append((filtered>0).sum()-sum(count))
-        # percent = [c / sum(count) for c in count[1:]]    
 
         self.thresholds = {self.exit_id_list[i] : T[i]  for i in range(real_num_exit)}
         if args.rank == 0:
@@ -298,13 +289,6 @@ class ExitController(torch.nn.Module):
             value = self.value_net(x, i)
         else:
             raise NotImplementedError
-
-        # self.history_values[i].append(value)
-        # if torch.distributed.get_rank() == 0:
-        #     total = sum(len(h) for h in self.history_values)
-        #     if total > 0 and total % 100 == 0:
-        #         for layer, h in enumerate(self.history_values):
-        #             print(f'{layer=}, count={len(h)}, mean value = {torch.tensor(h).mean():.5f}')
         
         if bool(value <= self.thresholds[i]) is self.leq or i >= self.max_layer: # both be true or both be false
             self.cur_exit_id = i

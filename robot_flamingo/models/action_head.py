@@ -114,39 +114,6 @@ class MLPTanhHead(torch.nn.Module):
 
             # Register the sequential model
             self.mlp = nn.Sequential(*layers)
-        # if dropout_mode == 'last':
-        #     self.mlp = torch.nn.Sequential(
-        #         torch.nn.Linear(hidden_size, 1024),
-        #         nn.LayerNorm(1024) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Linear(1024, 512),
-        #         nn.LayerNorm(512) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Linear(512, 256),
-        #         nn.LayerNorm(256) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(256, output_size),
-        #         torch.nn.Tanh(),
-        #     )
-        # elif dropout_mode == 'layerwise':
-        #     self.mlp = torch.nn.Sequential(
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(hidden_size, 1024),
-        #         nn.LayerNorm(1024) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(1024, 512),
-        #         nn.LayerNorm(512) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(512, 256),
-        #         nn.LayerNorm(256) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(256, output_size),
-        #         torch.nn.Tanh(),
-        #     ) 
         elif layernorm:
             self.mlp = torch.nn.Sequential(
                 torch.nn.Dropout(dropout), 

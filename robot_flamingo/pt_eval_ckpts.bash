@@ -50,30 +50,6 @@ fi
 
 PORT=$((RANDOM % 16383 + 49152))
 
-if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 1 ]
-then
-torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flamingo/eval/$script \
-    --precision ${precision} \
-    --use_gripper \
-    --use_state \
-    --diverse_inst ${diverse_inst} \
-    --window_size ${window_size} \
-    --fusion_mode ${fusion_mode} \
-    --run_name RobotFlamingoDBG \
-    --calvin_dataset ${calvin_dataset_path} \
-    --cross_attn_every_n_layers 4 \
-    --evaluate_from_checkpoint ${evaluate_from_checkpoint} \
-    --calvin_conf_path ${calvin_conf_path} \
-    --amp ${amp} \
-    --eval_exit_mode ${eval_exit_mode} \
-    --multi_execution ${multi_execution} \
-    --value_net_ckpt ${value_net_ckpt} \
-    --exit_ratio ${exit_ratio} \
-    --workers 1 > ${log_file} 2>&1
-fi
-
-if [ ${use_gripper} -eq 1 ] && [ ${use_state} -eq 0 ]
-then
 torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flamingo/eval/$script \
     --precision ${precision} \
     --use_gripper \
@@ -95,26 +71,5 @@ torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flam
     --threshold_type ${threshold_type} --exit_dist ${exit_dist} --max_layer ${max_layer} \
     --use_action_ensemble ${use_action_ensemble} \
     --num_seq ${num_seq} \
-    --validation_set \
-    --workers 1 > ${log_file} 2>&1
-fi
-
-if [ ${use_gripper} -eq 0 ] && [ ${use_state} -eq 0 ]
-then
-torchrun --nnodes=1 --nproc_per_node=${node_num}  --master_port=$PORT robot_flamingo/eval/$script \
-    --precision ${precision} \
-    --diverse_inst ${diverse_inst} \
-    --run_name RobotFlamingoDBG \
-    --window_size ${window_size} \
-    --fusion_mode ${fusion_mode} \
-    --calvin_dataset ${calvin_dataset_path} \
-    --cross_attn_every_n_layers 4 \
-    --evaluate_from_checkpoint ${evaluate_from_checkpoint} \
-    --calvin_conf_path ${calvin_conf_path} \
-    --amp ${amp} \
-    --eval_exit_mode ${eval_exit_mode} \
-    --multi_execution ${multi_execution} \
-    --value_net_ckpt ${value_net_ckpt} \
-    --exit_ratio ${exit_ratio} \
-    --workers 1 > ${log_file} 2>&1
-fi
+    --validation_set
+    # --workers 1 > ${log_file} 2>&1

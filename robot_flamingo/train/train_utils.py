@@ -297,8 +297,6 @@ def train_one_epoch_calvin(
                     bs, seq_len = num_actions.shape[:2]
                     num_actions = num_actions.reshape(bs, seq_len, args.multi_step_action, -1)
                 loss_mse = loss_calvin_num = torch.nn.functional.huber_loss(num_actions, labels[0])
-                loss_mle = torch.tensor([.0])
-                std = torch.tensor([.0])
             else:
                 raise NotImplementedError(f'{args.head_type=}')
 
@@ -363,8 +361,6 @@ def train_one_epoch_calvin(
                         "loss_calvin_bin": loss_calvin_bin.item(),
                         "loss_calvin_num": loss_calvin_num.item(),
                         "mse": loss_mse.item(),
-                        "mle": loss_mle.item(),
-                        "mean_std": std.mean().item(),
                         "global_step": global_step,
                         "scale_factor": scaler.get_scale(),
                     },
@@ -375,10 +371,10 @@ def train_one_epoch_calvin(
         # Log loss to console
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
             print(
-                f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss: (all){loss_calvin.item():.3f} (mle) {loss_mle.item():.3f} (mse){loss_mse.item():.3f} (bce){loss_calvin_bin.item():.3f} (std) {std.mean().item():.3f}"
+                f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss: (all){loss_calvin.item():.3f} (mse){loss_mse.item():.3f} (bce){loss_calvin_bin.item():.3f}"
             )
         avg_horizon = min(100, len(mv_avg_loss))
-        t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, "loss": loss_calvin.item(), "mle": loss_mle.item(), "mse": loss_mse.item(), "Lbin": loss_calvin_bin.item(), "std": std.mean().item()})
+        t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, "loss": loss_calvin.item(), "mse": loss_mse.item(), "Lbin": loss_calvin_bin.item()})
 
         if args.save_every_iter != -1 and global_step % args.save_every_iter == 0 and global_step > 0:
                 
@@ -525,8 +521,6 @@ def train_one_epoch_calvin_multi_exit(
                 # print(f'{loss_calvin_num.shape=}')
                 
                 loss_mse = loss_calvin_num.mean()
-                loss_mle = torch.tensor([.0])
-                std = torch.tensor([.0])
 
         with autocast():
             # loss_calvin_bin = torch.nn.functional.binary_cross_entropy(bin_actions, labels[1])
@@ -611,8 +605,6 @@ def train_one_epoch_calvin_multi_exit(
                         "extra_exit_loss2_bin": extra_exit_loss2_bin.item(),
                         "extra_exit_loss2_num": extra_exit_loss2_num.item(),
                         "mse": loss_mse.item(),
-                        "mle": loss_mle.item(),
-                        "mean_std": std.mean().item(),
                         "global_step": global_step,
                         "scale_factor": scaler.get_scale(),
                     }
@@ -626,10 +618,10 @@ def train_one_epoch_calvin_multi_exit(
         # Log loss to console
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
             print(
-                f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss: (all){loss_calvin.item():.3f} (mle) {loss_mle.item():.3f} (mse){loss_mse.item():.3f} (bce){loss_calvin_bin.mean().item():.3f} (std) {std.mean().item():.3f}"
+                f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss: (all){loss_calvin.item():.3f} (mse){loss_mse.item():.3f} (bce){loss_calvin_bin.mean().item():.3f}"
             )
         avg_horizon = min(100, len(mv_avg_loss))
-        t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, "loss": loss_calvin.item(), "mle": loss_mle.item(), "mse": loss_mse.item(), "Lbin": loss_calvin_bin.mean().item(), "std": std.mean().item()})
+        t.set_postfix({"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, "loss": loss_calvin.item(), "mse": loss_mse.item(), "Lbin": loss_calvin_bin.mean().item()})
 
         if args.save_every_iter != -1 and global_step % args.save_every_iter == 0 and global_step > 0:
             if args.rank == 0:

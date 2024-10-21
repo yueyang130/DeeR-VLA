@@ -12,7 +12,6 @@ from torch.distributed.elastic.multiprocessing.errors import record
 
 # please use EGL for GPU-accelerating rendering. Don't use osmesa (CPU-only software rendering), which causes texture discrepancy from GPU rendering.
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
-# os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
 import numpy as np
 import torch
 import wandb
