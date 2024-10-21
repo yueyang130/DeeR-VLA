@@ -111,8 +111,6 @@ def create_model_and_transforms(
     global_latent=1,
     refresh=-1,
     head_type='deterministic',
-    tanh_squash_dist=True, 
-    state_dependent_std=True,
     **flamingo_kwargs,
 ):
     """
@@ -234,8 +232,6 @@ def create_model_and_transforms(
         replan=replan,
         decoder_type=decoder_type,
         head_type=head_type,
-        tanh_squash_dist=tanh_squash_dist, 
-        state_dependent_std=state_dependent_std,
         hidden_size=hidden_size,
         refresh=refresh,
         fwd_pred=fwd_pred,
@@ -279,8 +275,7 @@ def create_model_and_transforms(
         model.vision_encoder.requires_grad_(True)
     if len(model.lm_exits) > 0:
         model.lm_exit_modules.requires_grad_(True)
-    if model.use_extra_exit:
-        model.extra_exit.requires_grad_(True)
+    model.extra_exit.requires_grad_(True)
     # # Unfreeze the action head 
     # model.action_head.requires_grad_(True)
 

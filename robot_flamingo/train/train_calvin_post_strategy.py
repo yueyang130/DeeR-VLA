@@ -9,21 +9,16 @@ from collections import OrderedDict
 import numpy as np
 import torch
 import wandb
-from huggingface_hub import hf_hub_download
-
 from torch.nn.parallel import DistributedDataParallel as DDP
-
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
-from train_utils import get_checkpoint, train_one_epoch_calvin, train_one_epoch_calvin_diff, train_one_epoch_calvin_cotrain, train_one_epoch_calvin_two_way, \
-train_one_epoch_calvin_multi_exit, get_ckpt_name, get_ckpt_name_pattern, save_ckpt, get_layerwise_lr_list, get_num_layer_for_flamingo
+from train_utils import get_checkpoint, train_one_epoch_calvin, train_one_epoch_calvin_multi_exit, get_ckpt_name, get_ckpt_name_pattern, save_ckpt
 from torch.distributed.elastic.multiprocessing.errors import record
 from transformers import (
     get_constant_schedule_with_warmup,
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
 )
-
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
 
 def random_seed(seed=42, rank=0):
@@ -61,7 +56,7 @@ def main():
     parser.add_argument("--num_joint_epochs", type=int, default=1)
     parser.add_argument("--num_exit_epochs", type=int, default=1)
     parser.add_argument("--save_freq", type=int, default=1)
-    parser.add_argument("--window_size", type=int, default=32)
+    parser.add_argument("--window_size", type=int, default=12)
     parser.add_argument(
         "--logging_steps", type=int, default=100, help="log loss every n steps"
     )
@@ -175,7 +170,7 @@ def main():
     )
     parser.add_argument(
         "--fusion_mode",
-        default="pre", # pre / post / two way (use gripper view as extra input image)
+        default="post", # pre / post / two way (use gripper view as extra input image)
         type=str,
         help="pre or post to fusion multi vision info",
     )
@@ -189,8 +184,8 @@ def main():
         help="whether use separate resamplers for third party and gripper camera",
     )
     parser.add_argument("--train_params", type=int, default=-1)
-    parser.add_argument('--rgb_pad', type=int, default=-1)
-    parser.add_argument('--gripper_pad', type=int, default=-1)
+    parser.add_argument('--rgb_pad', type=int, default=10)
+    parser.add_argument('--gripper_pad', type=int, default=4)
     parser.add_argument('--n_timesteps', type=int, default=150, help="diffusion time steps")
     parser.add_argument(
         "--predict_epsilon",
@@ -319,10 +314,7 @@ def main():
     parser.add_argument("--multi_step_action", type=int, default=1, help="multiple step action prediction")
     
     # For policy
-    # parser.add_argument('--head_type', type=str, default="lstm") # diffusion / gaussian
-    parser.add_argument('--head_type', type=str, default="deterministic")  # policy type: deterministic / gaussian / diffusion
-    parser.add_argument("--tanh_squash_dist", action="store_true", default=False)
-    parser.add_argument("--state_dependent_std", action="store_true", default=False)
+    parser.add_argument('--head_type', type=str, default="deterministic")  # policy type: deterministic
     parser.add_argument("--bin_coef", type=float, default=1.0)
     # for proxy task
     parser.add_argument("--data_percent", type=float, default=1.0)
@@ -333,43 +325,23 @@ def main():
         help="Floating point precision.",
     )
     # for dynamic network
-    # backbone
-    parser.add_argument("--layer_decay", type=float, default=1.0, help='layerwise lr decay for flamingo layers')
     # exit
-    parser.add_argument("--early_exit_layer", type=int, default=-1, help='remove all layers after it') 
+    parser.add_argument("--early_exit_layer", type=int, default=11, help='Only use first N+1 LLM layers. Delete all layers after them') 
     parser.add_argument("--multi_exit", action="store_true", default=False)
-    parser.add_argument("--exit_interval", type=int, default=1, help='intervals between exits')
+    parser.add_argument("--exit_interval", type=int, default=2, help='intervals between exits')
     parser.add_argument("--exit_weight", type=str, default='uniform', help='uniform/ascending/descending')
     parser.add_argument("--exit_lr_scale", type=float, default=1.0, help='scale learning rate for exits (only for joint training)')
-    parser.add_argument("--exit_dropout", type=float, default=0.0, help='')
-    parser.add_argument("--lstm_dropout", type=float, default=0.1, help='')
-    parser.add_argument("--dropout_mode", default='wo_last', choices=['layerwise', 'last', 'wo_last'])
-    parser.add_argument("--mlp_layernorm", default=False, action="store_true")
-    parser.add_argument("--lstm_layernorm", default=False, action="store_true")
-    parser.add_argument("--mlp_num_hidden_layers", type=int, default=3)
+    parser.add_argument("--exit_dropout", type=float, default=0.4, help='')
+    parser.add_argument("--lstm_dropout", type=float, default=0.3, help='')
+    parser.add_argument("--dropout_mode", default='layerwise', choices=['layerwise', 'last', 'wo_last'])
+    parser.add_argument("--mlp_num_hidden_layers", type=int, default=2)
     parser.add_argument("--lstm_num_layers", type=int, default=4)
-    parser.add_argument("--exit_decay", action="store_true", default=False)
-    parser.add_argument("--use_extra_exit", action="store_true", default=False)
+    parser.add_argument("--exit_decay", action="store_true", default=False, help="enable weight decay for exit head")
     parser.add_argument("--share_exit", action="store_true", default=False)
-    parser.add_argument("--detach_extra_exit", type=int, default=1)
-    parser.add_argument("--regularize_extra_exit", action="store_true", default=False)
-    parser.add_argument("--use_layerwise_projection", action="store_true", default=False)
-    parser.add_argument("--num_projection_layers", type=int, default=1)
-    parser.add_argument("--skip_connection", action="store_true", default=False)
-    parser.add_argument("--feat_distill_coef", type=float, default=0.0, help='use feature distillation if coef is greater than 0')
-    parser.add_argument("--no_auxiliary_action_head_loss", action="store_true", default=False) # If true, only loss from the global exit head will be used.
-    # for value net
-    # parser.add_argument("--with_value_net", action="store_true", default=False, help='jointly train value net')
-
     args = parser.parse_args()
     
-    # print(f'{args.tanh_squash_dist=}')
-    # if 'debug' in args.calvin_dataset:
-    #     os.environ['WANDB_MODE'] = 'online'
-    # else:
-    #     # os.environ['WANDB_MODE'] = 'offline'
-    #     os.environ['WANDB_MODE'] = 'online'
-        
+    args.mlp_layernorm = True
+    args.lstm_layernorm = True
     
     if args.eval_hist_size == -1:
         args.eval_hist_size = args.window_size
@@ -431,8 +403,6 @@ def main():
         no_image_patch=args.no_image_patch,
         global_latent=args.global_latent,
         head_type=args.head_type,
-        tanh_squash_dist=args.tanh_squash_dist,
-        state_dependent_std=args.state_dependent_std,
         early_exit_layer=args.early_exit_layer,
         multi_exit=args.multi_exit,
         exit_interval=args.exit_interval,
@@ -443,12 +413,7 @@ def main():
         lstm_layernorm=args.lstm_layernorm,
         mlp_num_hidden_layers=args.mlp_num_hidden_layers,
         lstm_num_layers=args.lstm_num_layers,
-        use_extra_exit=args.use_extra_exit,
-        detach_extra_exit=args.detach_extra_exit,
         share_exit=args.share_exit,
-        use_layerwise_projection=args.use_layerwise_projection,
-        num_projection_layers=args.num_projection_layers,
-        skip_connection=args.skip_connection,
     )
     
     if args.early_exit_layer < 0:
@@ -519,10 +484,6 @@ def main():
         def apply_lr_scale(n, p):
             if not only_head and is_head(n): # scale head lr only when joint training
                 lr_scale = args.exit_lr_scale
-            elif not only_head: # scale transformer layers lr when joint training
-                # layer_id = get_num_layer_for_flamingo(n, len(layerwsie_lr_scale_list), args.exit_interval)
-                # lr_scale = layerwsie_lr_scale_list[layer_id]
-                lr_scale = 1.0
             else: # not scale when only train exit
                 lr_scale = 1.0
 
@@ -563,19 +524,11 @@ def main():
 
         return grouped_params 
 
-
-    # if args.rank == 0:
-    #     print([n for n, p in model.named_parameters() if p.requires_grad])
-    #     print([n for n, p in model.perceiver.named_parameters() if p.requires_grad])
-    #     print([n for n, p in model.lang_encoder.named_parameters() if p.requires_grad])
-    
     # adaptviely adjust learning rate with the base 8GPU and bs=6
     args.exit_learning_rate = args.exit_learning_rate * (args.batch_size_calvin / 6) * (args.world_size / 8) # adaptive lr
     args.joint_learning_rate = args.joint_learning_rate * (args.batch_size_calvin / 6) * (args.world_size / 8) # adaptive lr
     
-    layerwsie_lr_scale_list = get_layerwise_lr_list(args)
     if args.rank == 0:
-        print(layerwsie_lr_scale_list)
         print([{'lr': x['lr'], 'weight_decay': x['weight_decay'], 'num_params': sum(p.numel() for p in x['params']) / 1e6} for x in get_grouped_params(ddp_model, only_head=True)])
         print([{'lr': x['lr'], 'weight_decay': x['weight_decay'], 'num_params': sum(p.numel() for p in x['params']) / 1e6} for x in get_grouped_params(ddp_model, only_head=False)])
     
@@ -631,7 +584,6 @@ def main():
             joint_optimizer, num_warmup_steps=args.joint_warmup_steps
         )
 
-    use_diff = (args.head_type == "diffusion")
     # check if a checkpoint exists for this run
 
     if os.path.exists(f"{args.run_name}") and args.resume_from_checkpoint is None:
@@ -707,9 +659,8 @@ def main():
             lr_scheduler = exit_lr_scheduler
             only_train_head = True
 
-
-        if args.head_type == "diffusion":
-            train_one_epoch_calvin_diff(
+        if args.multi_exit:
+            train_one_epoch_calvin_multi_exit(
                 args=args,
                 model=ddp_model,
                 epoch=epoch,
@@ -719,57 +670,24 @@ def main():
                 calvin_loader=calvin_loader,
                 device_id=device_id,
                 wandb=wandb,
-            )
-        elif args.fusion_mode == 'two_way':
-            train_one_epoch_calvin_two_way(
-                args=args,
-                model=ddp_model,
-                epoch=epoch,
-                tokenizer=tokenizer,
-                optimizer=optimizer,
-                lr_scheduler=lr_scheduler,
-                calvin_loader=calvin_loader,
-                device_id=device_id,
-                wandb=wandb,
+                only_train_head=only_train_head,
             )
         else:
-            if args.multi_exit:
-                train_one_epoch_calvin_multi_exit(
-                    args=args,
-                    model=ddp_model,
-                    epoch=epoch,
-                    tokenizer=tokenizer,
-                    optimizer=optimizer,
-                    lr_scheduler=lr_scheduler,
-                    calvin_loader=calvin_loader,
-                    device_id=device_id,
-                    wandb=wandb,
-                    only_train_head=only_train_head,
-                )
-            else:
-                train_one_epoch_calvin(
-                    args=args,
-                    model=ddp_model,
-                    epoch=epoch,
-                    tokenizer=tokenizer,
-                    optimizer=optimizer,
-                    lr_scheduler=lr_scheduler,
-                    calvin_loader=calvin_loader,
-                    device_id=device_id,
-                    wandb=wandb,
-                )
+            train_one_epoch_calvin(
+                args=args,
+                model=ddp_model,
+                epoch=epoch,
+                tokenizer=tokenizer,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                calvin_loader=calvin_loader,
+                device_id=device_id,
+                wandb=wandb,
+            )
 
         if args.rank == 0 and epoch % args.save_freq == 0:
             save_ckpt(args, ddp_model, optimizer, lr_scheduler, epoch, epoch)
 
-    # if args.rank == 0:
-    #     if not os.path.exists(args.run_name):
-    #         os.makedirs(args.run_name)
-
-    #     ckpt_name = get_ckpt_name(args,)
-    #     torch.save(get_checkpoint(ddp_model), f"{args.run_name}/{ckpt_name}")
-    #     if args.report_to_wandb and args.save_checkpoints_to_wandb:
-    #         wandb.save(f"{args.run_name}/{ckpt_name}")
 
 
 if __name__ == "__main__":

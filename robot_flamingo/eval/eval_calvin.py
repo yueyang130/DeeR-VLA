@@ -20,9 +20,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from robot_flamingo.data.data import get_data
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env
-from eval_utils import eval_one_epoch_calvin, eval_one_epoch_calvin_ddp, check_loaded_parameters
+from eval_utils import eval_one_epoch_calvin_ddp, check_loaded_parameters
 from robot_flamingo.models.factory import create_model_and_transforms, mpt_dict
-from models.value_net import LSTMValueHead, ExitController, MLPValueHead, DiffValueHead, SimValueNet, TimeValueNet, RandomValueNet, ActionValueNet
+from models.value_net import ExitController, ActionValueNet
 
 
 def random_seed(seed=42, rank=0):
@@ -199,7 +199,7 @@ def main():
         default="fp32",
         help="Floating point precision.",
     )
-    parser.add_argument('--head_type', type=str, default="deterministic")  # policy type: deterministic / gaussian / diffusion
+    parser.add_argument('--head_type', type=str, default="deterministic")  # policy type: deterministic
     parser.add_argument(
         "--from_scratch",
         default=False,
@@ -332,7 +332,7 @@ def main():
     # timestep dynamic
     parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
     # dynamic early-exit
-    parser.add_argument("--value_type", type=str, default='loss') # loss / sim 
+    parser.add_argument("--value_type", type=str, default='action')
     parser.add_argument("--threshold_type", type=str, default='mean') # for action delta [mean / L2 / max]
     parser.add_argument("--exit_dist", type=str, default='') # for exit dist [exp / gauss / gamma]
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
@@ -354,10 +354,7 @@ def main():
     print(f'{args.load_threshold=}')
     print(f'{args.layerwise_exit_eval=}')
     
-    if args.value_type == 'loss':
-        args.batch_size_calvin = 32
-    else:
-        args.batch_size_calvin = 16
+    args.batch_size_calvin = 16
     if 'state' in args.evaluate_from_checkpoint:
         args.use_state = True
     args.real_data = True if 'real' in args.evaluate_from_checkpoint else False
@@ -467,12 +464,9 @@ def main():
         if args.rank==0: print(f'set {name} to {value}!')
         
     readout_args(args, checkpoint, 'head_type', 'deterministic')
-    readout_args(args, checkpoint, 'tanh_squash_dist', False)
-    readout_args(args, checkpoint, 'state_dependent_std', False)
     readout_args(args, checkpoint, 'early_exit_layer', -1)
     # readout_args(args, checkpoint, "precision", 'fp32')
     readout_args(args, checkpoint, "multi_exit", False)
-    readout_args(args, checkpoint, "use_extra_exit", False)
     readout_args(args, checkpoint, "exit_interval", 1)
     readout_args(args, checkpoint, "exit_dropout", 0.0)
     readout_args(args, checkpoint, "lstm_dropout", 0.0)
@@ -482,9 +476,6 @@ def main():
     readout_args(args, checkpoint, "mlp_num_hidden_layers", 3)
     readout_args(args, checkpoint, "lstm_num_layers", 4)
     readout_args(args, checkpoint, "pooling", 'max')
-    readout_args(args, checkpoint, "use_layerwise_projection", False)
-    readout_args(args, checkpoint, "num_projection_layers", 1)
-    readout_args(args, checkpoint, "skip_connection", False)
     
     if 'layernorm' in checkpoint: # for compatibility with old code
         args.mlp_layernorm = checkpoint['layernorm']
@@ -537,8 +528,6 @@ def main():
         global_latent=args.global_latent,
         # refresh=args.refresh
         head_type=args.head_type,
-        tanh_squash_dist=args.tanh_squash_dist,
-        state_dependent_std=args.state_dependent_std,
         early_exit_layer=min(args.early_exit_layer, args.max_layer),
         multi_exit=False if not args.layerwise_exit_eval else True, # save GPU memory by not creating auxiliary action heads 1,2,..,N
         exit_interval=args.exit_interval,
@@ -549,10 +538,6 @@ def main():
         lstm_layernorm=args.lstm_layernorm,
         lstm_num_layers=args.lstm_num_layers,
         mlp_num_hidden_layers=args.mlp_num_hidden_layers,
-        use_extra_exit=args.use_extra_exit,
-        use_layerwise_projection=args.use_layerwise_projection,
-        num_projection_layers=args.num_projection_layers,
-        skip_connection=args.skip_connection,
         layerwise_exit_eval=args.layerwise_exit_eval,
     )
     checkpoint_path = args.openflamingo_checkpoint
@@ -595,75 +580,8 @@ def main():
     ddp_model.eval()
     
     value_net_ckpt = None
-    if args.eval_exit_mode == 'dynamic':
-        if args.value_type == 'loss':
-            assert args.value_net_ckpt is not None, "Please specify a checkpoint for value net."
-            if args.rank == 0:
-                print(f"Loading value net checkpoint from {args.value_net_ckpt}")
-            value_net_ckpt = torch.load(args.value_net_ckpt, map_location="cpu")
-            
-            readout_args(args, value_net_ckpt, "with_exit_embed", False)
-            readout_args(args, value_net_ckpt, "discrete", False)
-            readout_args(args, value_net_ckpt, "num_bin", 100)
-            
-            num_exit = model.get_exit_num()
-            
-            
-            value_net = MLPValueHead(
-                in_features=model.lm_head.in_features, 
-                window_size=args.eval_hist_size,
-                hidden_size=model.lm_head.hidden_size,
-                fusion_mode=args.fusion_mode, 
-                use_state=args.use_state, 
-                pooling=args.pooling,
-                with_exit_embed=args.with_exit_embed,
-                num_exits=model.get_exit_num(),
-                discrete=args.discrete,
-                num_bin=args.num_bin,
-            )
-            # value_net = LSTMValueHead(
-            #     in_features=model.lm_head.in_features, 
-            #     window_size=args.eval_hist_size,
-            #     dropout=0.0,
-            #     hidden_size=model.lm_head.hidden_size,
-            #     fusion_mode=args.fusion_mode, 
-            #     use_state=args.use_state, 
-            #     pooling=args.pooling,
-            #     with_exit_embed=args.with_exit_embed,
-            #     num_exits=num_exit,
-            #     discrete=args.discrete,
-            #     num_bin=args.num_bin,   
-            # )
-            # value_net = DiffValueHead(
-            # in_features=1024, 
-            # window_size=args.eval_hist_size,
-            # dropout=0.0,
-            # hidden_size=model.lm_head.hidden_size,
-            # with_exit_embed=args.with_exit_embed,
-            # # with_time_embed=args.with_time_embed,
-            # with_time_embed=False,
-            # num_exits=model.get_exit_num(),
-            # discrete=args.discrete,
-            # num_bin=args.num_bin,
-            # )
-            
-            value_net_ckpt_dict = {k.replace('module.', ''): v for k, v in value_net_ckpt["model_state_dict"].items()} # remove ddp prefix
-            value_net_ckpt_dict = {k.replace('value_net.', 'head.'): v for k, v in value_net_ckpt_dict.items()} # Be compatible with previous value_net code
-            value_net.load_state_dict(value_net_ckpt_dict, True)
-            
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=True)
-        
-        elif args.value_type == 'sim':
-            value_net = SimValueNet(pooling=False, exit_ids=model.get_all_exit_idx(), interval=args.exit_interval)
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=False)
-            # exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), leq=True)
-        elif args.value_type == 'time':
-            value_net = TimeValueNet(T=360, exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
-        elif args.value_type == 'random':
-            value_net = RandomValueNet(exit_ratio=args.exit_ratio, exit_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
-            exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage)
-        elif args.value_type == 'action':
+    if args.eval_exit_mode == 'dynamic': 
+        if args.value_type == 'action':
             value_net = ActionValueNet(exit_list=model.get_all_exit_idx(), exit_head=ddp_model.module.extra_exit, interval=args.exit_interval, window_size=args.window_size, threshold_type=args.threshold_type)
             exit_controller = ExitController(value_net, exit_id_list=model.get_all_exit_idx(), steps_per_stage=args.steps_per_stage, leq=True, exit_dist=args.exit_dist, max_layer=args.max_layer)
         else:
@@ -676,8 +594,6 @@ def main():
         # setup dataloader for dynamically finding thresholds
         if args.debug:
             calvin_dataset = get_data(args, image_processor, tokenizer, "debug")
-        # elif args.real_data:
-        #     calvin_dataset = get_data(args, image_processor, tokenizer, "real")
         else:
             calvin_dataset = get_data(args, image_processor, tokenizer, "calvin")
         calvin_dataset.set_epoch(0)
@@ -691,7 +607,6 @@ def main():
                 ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name, values)
             else:
                 values = ddp_exit_controller.module.set_threshold(args, model, calvin_loader, args.exit_ratio, args.llm_name)
-                
                 checkpoint["values"] = values
                 if args.rank==0: 
                     print("save new values for threshold to ckpt.")
@@ -711,7 +626,6 @@ def main():
     gc.collect()
     torch.cuda.empty_cache()
 
-    
     eval_log_dir = None
     if args.visualize:
         eval_log_dir = 'evaluate/{}_{}_{}_{}'.format(args.evaluate_from_checkpoint.split('.')[0], args.eval_exit_mode, args.value_type, args.exit_ratio, )
@@ -739,8 +653,6 @@ def main():
         print(results[0]) # avg len
         print(results[1]) # avg exit
     
-
-
 if __name__ == "__main__":
     os.environ["NCCL_BLOCKING_WAIT"] = '1'
     main()

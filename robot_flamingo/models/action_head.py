@@ -10,50 +10,6 @@ from robot_flamingo.models.trajectory_gpt2 import get_gpt_model
 # from .unets import *
 import copy
 
-
-# class LayerNormLSTM(nn.Module):
-#     def __init__(self, input_size, hidden_size, num_layers, dropout, batch_first):
-#         super(LayerNormLSTM, self).__init__()
-#         self.num_layers = num_layers
-#         self.hidden_size = hidden_size
-#         self.batch_first = batch_first
-        
-#         # Create layers of LSTM followed by LayerNorm
-#         self.layers = nn.ModuleList()
-#         for i in range(num_layers):
-#             is_last_layer = i == num_layers - 1
-#             dropout_value = 0 if is_last_layer else dropout
-#             self.layers.append(nn.LSTM(
-#                 input_size=input_size,
-#                 hidden_size=hidden_size,
-#                 num_layers=1,
-#                 bidirectional=False,
-#                 batch_first=batch_first,
-#                 dropout=dropout_value,
-#             ))
-#             self.layers.append(nn.LayerNorm(hidden_size))
-#             input_size = hidden_size  # Next layer's input is current layer's output
-
-#     def forward(self, x, hidden=None):
-#         # Split hidden state into h and c for each layer, if provided
-#         if hidden:
-#             hidden_states = [(hidden[0][i:i+1], hidden[1][i:i+1]) for i in range(self.num_layers)]
-#         else:
-#             hidden_states = [None] * self.num_layers
-        
-#         # Process each LSTM layer followed by LayerNorm
-#         for i in range(0, len(self.layers), 2):
-#             lstm = self.layers[i]
-#             layer_norm = self.layers[i + 1]
-#             x, new_hidden_state = lstm(x, hidden_states[i // 2])
-#             x = layer_norm(x)
-#             hidden_states[i // 2] = new_hidden_state
-        
-#         # Prepare the final hidden state tuple for return
-#         final_hidden = (torch.cat([h[0] for h in hidden_states], dim=0),
-#                         torch.cat([h[1] for h in hidden_states], dim=0))
-#         return x, final_hidden
-    
     
 
 class LayerNormLSTM(nn.Module):
@@ -237,28 +193,6 @@ class MLPTanhHead(torch.nn.Module):
     def forward(self, x):
         return self.mlp(x)
     
-class MLPNohHeadLight(torch.nn.Module):
-    def __init__(self, hidden_size, output_size, dropout, layernorm=False):
-        super().__init__()
-        if layernorm:
-            self.mlp = torch.nn.Sequential(
-                torch.nn.Dropout(dropout), 
-                torch.nn.Linear(hidden_size, 256),
-                nn.LayerNorm(256) if layernorm else nn.Identity(),
-                torch.nn.ReLU(),
-                torch.nn.Linear(256, output_size)
-            )
-        else:
-            self.mlp = torch.nn.Sequential(
-                torch.nn.Dropout(dropout), 
-                torch.nn.Linear(hidden_size, 256),
-                torch.nn.ReLU(),
-                torch.nn.Linear(256, output_size)
-            )
-    
-    def forward(self, x):
-        return self.mlp(x)
-
 
 class MLPNohHead(torch.nn.Module):
     def __init__(self, hidden_size, output_size, dropout, layernorm):
@@ -315,40 +249,6 @@ class MLPSigmoidHead(torch.nn.Module):
             # Register the sequential model
             self.mlp = nn.Sequential(*layers)
 
-        # if dropout_mode == 'last':
-        #     self.mlp = torch.nn.Sequential(
-        #         torch.nn.Linear(hidden_size, 1024),
-        #         nn.LayerNorm(1024) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Linear(1024, 512),
-        #         nn.LayerNorm(512) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Linear(512, 256),
-        #         nn.LayerNorm(256) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(256, output_size),
-        #         torch.nn.Sigmoid(),
-        #     )
-        # elif dropout_mode == 'layerwise':
-        #     if num_hidden_layers != 3: raise NotImplementedError
-        #     self.mlp = torch.nn.Sequential(
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(hidden_size, 1024),
-        #         nn.LayerNorm(1024) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(1024, 512),
-        #         nn.LayerNorm(512) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(512, 256),
-        #         nn.LayerNorm(256) if layernorm else nn.Identity(),
-        #         torch.nn.ReLU(),
-        #         torch.nn.Dropout(dropout), 
-        #         torch.nn.Linear(256, output_size),
-        #         torch.nn.Sigmoid(),
-        #     )
         elif layernorm:
             if num_hidden_layers != 3: raise NotImplementedError
             self.mlp = torch.nn.Sequential(
@@ -401,43 +301,6 @@ class MLPSigmoidHead(torch.nn.Module):
         else:
             return self.mlp[-1](x)
 
-class MLPActionHead(torch.nn.Module):
-    def __init__(self, hidden_size, dropout, layernorm):
-        super().__init__()
-        self.hidden_size = hidden_size
-        # Create a linear layer for each action
-        self.num_head = nn.Sequential(
-            torch.nn.Dropout(dropout), 
-            nn.Linear(hidden_size, 1024),
-            nn.ReLU(),
-            torch.nn.Dropout(dropout), 
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            torch.nn.Dropout(dropout), 
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 6),
-        )
-
-        self.bin_head = nn.Sequential(
-            torch.nn.Dropout(dropout), 
-            nn.Linear(hidden_size, 1024),
-            nn.ReLU(),
-            torch.nn.Dropout(dropout), 
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            torch.nn.Dropout(dropout), 
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1),
-        )
-
-    def forward(self, x):
-        x = x[:, -1]  # pick up the last frame output
-        x1 = self.num_head(x)
-        x2 = self.bin_head(x).sigmoid()
-        return x1, x2
-
 
 class ActionDecoder(nn.Module):
     def act(
@@ -483,38 +346,6 @@ class ActionDecoder(nn.Module):
     def clear_hidden_state(self) -> None:
         pass
     
-    
-class LayerwiseProjection(nn.Module):
-    def __init__(self, in_features, hidden_dim, num_layers, dropout, layernorm, exit_id_list, skip_connection) -> None:
-        super().__init__()
-        
-        self.skip_connection = skip_connection
-        if num_layers == 1:
-            self.projection = nn.Sequential(
-                            torch.nn.Dropout(dropout), 
-                            torch.nn.Linear(in_features, in_features),
-                                    )
-        elif num_layers == 2:
-            self.projection = nn.Sequential(
-                            torch.nn.Dropout(dropout), 
-                            torch.nn.Linear(in_features, hidden_dim),
-                            nn.GELU(),
-                            torch.nn.Dropout(dropout), 
-                            torch.nn.Linear(hidden_dim, in_features),
-                                    )
-        else:
-            raise NotImplementedError
-        self.layernorm = nn.LayerNorm(in_features) if layernorm else nn.Identity()
-        
-        
-    def forward(self, x):
-        if self.skip_connection:
-            x = self.projection(x) + x
-        else:
-            x = self.projection(x)
-            
-        x = self.layernorm(x)
-        return x
 
 class FCDecoder(ActionDecoder):
     def __init__(
@@ -630,9 +461,6 @@ class DeterministicDecoder(ActionDecoder):
         return_feature=False,
         pooling='max',
         is_extra_exit=False,
-        use_layerwise_projection=False,
-        num_projection_layers : int = 1,
-        skip_connection=False,
         exit_list=None,
         refresh_window=False, # enabling it would result in more computational cost
     ):
@@ -666,17 +494,7 @@ class DeterministicDecoder(ActionDecoder):
         self.history_len = history_len
         self.history_memory = []
         
-        # layerwise projection
         self.is_extra_exit = is_extra_exit
-        self.use_layerwise_projection = use_layerwise_projection
-        self.skip_connection = skip_connection
-        self.num_projection_layers = num_projection_layers
-        
-        if self.is_extra_exit and self.use_layerwise_projection:
-            self.layerwise_projection_dict = nn.ModuleDict({
-                str(exit_list[i]): LayerwiseProjection(in_features, hidden_size, num_projection_layers, policy_rnn_dropout_p, lstm_layernorm, exit_list, skip_connection) 
-                for i in range(len(exit_list))
-            })
         
         self.rnn = lstm_decoder
         self.rnn = self.rnn(in_features, hidden_size, lstm_num_layers, policy_rnn_dropout_p, lstm_layernorm)
@@ -733,36 +551,6 @@ class DeterministicDecoder(ActionDecoder):
         # reshape
         if input_feature.dim() == 3: # (bs * action_seq_len, lang_len, d)
             input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (bs * seq_len, d) maxpooling along lang_seq
-        
-        if self.is_extra_exit and self.use_layerwise_projection: # disabled
-            if not isinstance(layer_indices, int):
-                assert (layer_indices.ndim == 1 or layer_indices.ndim == 2) and input_feature.ndim == 2
-                layer_indices = layer_indices.view(-1)
-                assert layer_indices.shape[0] == input_feature.shape[0]
-                
-                # Output tensor initialized to zeros
-                output_features = torch.zeros_like(input_feature)
-
-                # Iterate over each unique index in layer_indices
-                unique_indices = layer_indices.unique()
-                for index in unique_indices:
-                    mask = (layer_indices == index)
-                    in_mask = mask.unsqueeze(-1).expand_as(input_feature)
-                    out_mask = mask.unsqueeze(-1).expand_as(output_features)
-                    selected_features = input_feature[in_mask].view(-1, input_feature.size(1))
-                    
-                    # Get the corresponding layerwise projection
-                    projection = self.layerwise_projection_dict[str(index.item())]
-                    projected_features = projection(selected_features)
-
-                    # Place the projected features back in the output tensor
-                    output_features[out_mask] = projected_features.view_as(output_features[out_mask])
-                    
-                input_feature = output_features
-                
-            else:
-            # inference
-                input_feature = self.layerwise_projection_dict[str(layer_indices)](input_feature)
         
         input_feature = input_feature.reshape(-1, cur_window_size, input_feature.shape[1]) # (bs, seq_len, d)
         
@@ -861,233 +649,6 @@ class DeterministicDecoder(ActionDecoder):
     # ) -> torch.Tensor:
     #     pred_actions, self.hidden_state = self(
     #         input_feature, self.hidden_state
-    #     )
-
-    #     return pred_actions
-
-
-class GaussianDecoder(ActionDecoder):
-    def __init__(
-        self,
-        in_features: int,
-        window_size: int,
-        dropout: float,
-        history_len = None,
-        out_features: int = 6,
-        hidden_size: int = 1024,
-        num_layers: int = 4,
-        policy_rnn_dropout_p: float = 0.1,
-        use_diff=False,
-        last_action=False,
-        fusion_mode='',
-        use_state=False,
-        multi_step_action=1,
-        return_feature=False,
-        pooling='max',
-        log_std_scale=1.0,
-        log_std_min=-10.0,
-        log_std_max=2.0,
-        # refer to SAC
-        tanh_squash_dist=True,
-        # refer to https://arxiv.org/pdf/2306.00972.pdf.
-        # state-dependent variance usually improves performance
-        state_dependent_std=True, 
-    ):
-        super(GaussianDecoder, self).__init__()
-        self.fc_state = None
-        self.use_state = use_state
-        if use_state:
-            print('Using state in decoder')
-            state_in_dim = 7
-            # state_out_dim = 256
-            # in_features += state_out_dim
-            # self.embed_arm_state = nn.Sequential(torch.nn.Linear(state_in_dim-1, state_out_dim), nn.ReLU())
-            # self.embed_gripper_state = nn.Sequential(torch.nn.Embedding(2, state_out_dim), nn.ReLU()) # one-hot gripper state
-            # self.embed_state = torch.nn.Linear(2*state_out_dim, state_out_dim)
-
-            self.embed_arm_state = nn.Sequential(torch.nn.Linear(state_in_dim-1, in_features), nn.ReLU())
-            self.embed_gripper_state = nn.Sequential(torch.nn.Embedding(2, in_features), nn.ReLU()) # one-hot gripper state
-            self.embed_state = torch.nn.Linear(2*in_features, in_features)
-        
-        if fusion_mode == 'two_way':
-            in_features *= 2
-        self.return_feature = return_feature
-        self.in_features = in_features
-        self.out_features = out_features
-        self.window_size = window_size
-        self.multi_step_action = multi_step_action
-        
-        self.log_std_scale = log_std_scale
-        self.log_std_min = log_std_min
-        self.log_std_max = log_std_max
-        self.tanh_squash_dist = tanh_squash_dist
-        self.state_dependent_std = state_dependent_std
-        
-        if history_len is None:
-            history_len = window_size
-        self.history_len = history_len
-        self.history_memory = []
-        self.rnn = lstm_decoder
-        self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p)
-        self.use_diff = use_diff
-        self.fusion_mode = fusion_mode
-        if not use_diff:
-            self.actions = MLPNohHead(hidden_size, out_features*multi_step_action, dropout)
-            if self.state_dependent_std:
-                self.std_network = MLPNohHead(hidden_size, out_features*multi_step_action, dropout)
-            else:
-                self.log_std = nn.Parameter(torch.zeros(out_features*multi_step_action))
-                self.std_network = lambda x : self.log_std
-            
-            self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action, dropout)
-        self.hidden_state = None
-        self.hidden_size = hidden_size
-        self.rnn_out = None
-        self.last_action = last_action
-        if self.use_diff:
-            self.last_action = True
-        if pooling == 'max':
-            self.global_1d_pool = nn.AdaptiveMaxPool1d(1)
-        else:
-            self.global_1d_pool = nn.AdaptiveAvgPool1d(1)
-        
-        if self.fusion_mode == 'two_way':
-            if pooling == 'max':
-                self.gripper_1d_max_pool = nn.AdaptiveMaxPool1d(1)
-            else:
-                self.gripper_1d_max_pool = nn.AdaptiveAvgPool1d(1)
-
-    def clear_hidden_state(self) -> None:
-        self.hidden_state = None
-
-    def forward(  # type: ignore
-        self,
-        input_feature: torch.Tensor,
-        h_0: Optional[torch.Tensor] = None,
-        state_tensor=None,
-        return_feature=False,
-        deterministic=False, # set True when acting
-        act=None, # for log prob and max-likelihood loss 
-        with_gripper_logits=False,
-    ):
-        assert deterministic ^ (act is not None)
-        
-        self.return_feature = return_feature
-        
-        # reshape
-        if input_feature.dim() == 3: # (bs * action_seq_len, lang_len, d)
-            if self.fusion_mode == 'two_way':
-                input_feature = input_feature.reshape(-1, self.window_size, *input_feature.shape[1:]) 
-                
-                bs = int(input_feature.shape[0] // 2)
-                
-                rgb_feat = input_feature[:bs].view(bs*self.window_size, *input_feature.shape[2:])
-                rgb_feat = self.global_1d_pool(rgb_feat.permute(0, 2, 1)).squeeze(-1)
-                
-                gripper_feat = input_feature[bs:].view(bs*self.window_size, *input_feature.shape[2:])
-                gripper_feat = self.global_1d_pool(gripper_feat.permute(0, 2, 1)).squeeze(-1)
-                
-                input_feature = torch.cat([rgb_feat, gripper_feat], dim=-1)
-            else:
-                input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) # (bs * seq_len, d) maxpooling along lang_seq
-        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) # (bs, seq_len, d)
-        if self.return_feature:
-            org_feat = copy.deepcopy(input_feature) 
-            org_feat = org_feat.view(self.window_size, org_feat.shape[-1])
-
-        if state_tensor is not None and self.use_state:
-            arm_state = state_tensor[..., :6] # b,len,state_dim-1
-            arm_state_embeddings = self.embed_arm_state(arm_state)
-            arm_state_embeddings = arm_state_embeddings.view(-1, self.window_size, arm_state_embeddings.shape[-1]) # b,len,h
-            gripper_state = ((state_tensor[..., -1]+1.0) / 2).long() # b,len,1
-            gripper_state_embeddings = self.embed_gripper_state(gripper_state)
-            gripper_state_embeddings = gripper_state_embeddings.view(-1, self.window_size, gripper_state_embeddings.shape[-1]) # b,len,h
-            state_embeddings = torch.cat((arm_state_embeddings, gripper_state_embeddings), dim=2) # b,len,2h
-            state_embeddings = self.embed_state(state_embeddings) # b,len,h
-
-            # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
-            input_feature = input_feature + state_embeddings
-        
-        if not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase):
-            # print('history len:',self.history_len)
-            if input_feature.shape[1] == 1:  # the first frame of an action sequence
-                self.history_memory.append(input_feature)
-                if len(self.history_memory) <= self.history_len:
-                    # print('cur hist_mem len: {}'.format(len(self.history_memory)))
-                    x, h_n = self.rnn(input_feature, self.hidden_state)
-                    self.hidden_state = h_n
-                    x = x[:, -1].unsqueeze(1)
-                    self.rnn_out = x.squeeze(1)
-                else:
-                    # the hidden state need to be refreshed based on the history window
-                    # print('hist_mem exceeded, refresh hidden state')
-                    cur_len = len(self.history_memory)
-                    for _ in range(cur_len - self.history_len):
-                        self.history_memory.pop(0)
-                    assert len(self.history_memory) == self.history_len
-                    hist_feature = torch.cat(self.history_memory, dim=1)
-                    self.hidden_state = None
-                    x, h_n = self.rnn(hist_feature, self.hidden_state)
-                    x = x[:, -1].unsqueeze(1)
-                    self.rnn_out = x.squeeze(1)
-            else:
-                # print('input feature lenght > 1', input_feature.shape)
-                self.hidden_state = h_0
-                x, h_n = self.rnn(input_feature, self.hidden_state) # (bs, seq_len, d) --> (bs, seq_len, d) LSTM go along action seqence
-                self.hidden_state = h_n
-                if self.last_action:
-                    x = x[:, -1].unsqueeze(1)
-                self.rnn_out = x.squeeze(1)
-        else:
-            raise NotImplementedError
-        if self.use_diff:
-            return self.rnn_out
-        
-        mean = self.actions(x)
-        log_std = self.std_network(x)
-        gripper = self.gripper(x, with_logits=with_gripper_logits)
-        
-        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
-        std = torch.exp(log_std)
-        
-        if self.tanh_squash_dist:
-            # refer openai spinningup SAC implementation https://github.com/openai/spinningup/blob/038665d62d569055401d91856abb287263096178/spinup/algos/pytorch/sac/core.py#L38
-            action_dist = torch.distributions.Normal(mean, std)
-            if act is None:
-                pi_action = mean
-            else:
-                # pi_action = action_dist.rsample()
-                act = torch.clamp(act, -1 + 1e-6, 1 - 1e-6)
-                pi_action = torch.arctanh(act) # unsquash
-            # guassian dist prob
-            logp_pi = action_dist.log_prob(pi_action).sum(axis=-1)   
-            # guassian-tanh (bounded) dist prob 
-            logp_pi -= (2*(np.log(2) - pi_action - F.softplus(-2*pi_action))).sum(axis=-1)
-            
-            pi_action = torch.tanh(pi_action)
-        else:
-            mean = torch.tanh(mean)
-            action_dist = torch.distributions.Normal(mean, std)
-            if act is None:
-                pi_action = mean
-            else:
-                # pi_action = action_dist.rsample()
-                pi_action = act
-            # guassian dist prob
-            pi_action = torch.clamp(pi_action, -1.0, 1.0)
-            logp_pi = action_dist.log_prob(pi_action).sum(axis=-1)
-              
-        if self.return_feature:
-            return mean,  gripper, org_feat, logp_pi, std,
-        else:
-            return mean,  gripper, logp_pi, std,
-
-    # def act(
-    #     self,
-    #     input_feature: torch.Tensor,
-    # ) -> torch.Tensor:
-    #     pred_actions, log_pi, std, self.hidden_state = self(
-    #         input_feature, self.hidden_state, deterministic=True,
     #     )
 
     #     return pred_actions

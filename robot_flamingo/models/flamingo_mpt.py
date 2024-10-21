@@ -3,7 +3,7 @@ from einops import rearrange, repeat
 from torch import nn
 import copy
 from open_flamingo.src.helpers import PerceiverResampler
-from robot_flamingo.models.action_head import DeterministicDecoder, DiffusionDecoder, FCDecoder, GPTDecoder, GaussianDecoder
+from robot_flamingo.models.action_head import DeterministicDecoder, DiffusionDecoder, FCDecoder, GPTDecoder
 from collections import namedtuple
 from copy import deepcopy
 import time
@@ -49,8 +49,6 @@ class MPTFlamingo(nn.Module):
         replan=-1,
         decoder_type='lstm',
         head_type='deterministic',
-        tanh_squash_dist=True, 
-        state_dependent_std=True,
         hidden_size=None,
         fwd_pred=False,
         fwd_pred_hand=False,
@@ -65,16 +63,11 @@ class MPTFlamingo(nn.Module):
         lstm_dropout=0.0,
         dropout_mode='layerwise',
         # for dynamic exit
-        use_extra_exit=False,
-        detach_extra_exit=True,
         layerwise_exit_eval=False,
         mlp_layernorm=False,
         lstm_layernorm=False,
         mlp_num_hidden_layers=3,
         lstm_num_layers=4,
-        use_layerwise_projection=False,
-        num_projection_layers : int = 1,
-        skip_connection=False,
     ):
         """
         Args:
@@ -159,11 +152,6 @@ class MPTFlamingo(nn.Module):
                 lm_head = DeterministicDecoder(in_features, self.window_size, exit_dropout, lstm_dropout, dropout_mode, mlp_layernorm, lstm_layernorm, mlp_num_hidden_layers, lstm_num_layers=lstm_num_layers,
                     use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
                     )
-            elif head_type == 'gaussian':
-                lm_head = GaussianDecoder(in_features, self.window_size, exit_dropout,
-                    use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
-                    tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
-                print(f'Use guassian policy! {tanh_squash_dist=}, {state_dependent_std=}')
                 
             self.lang_encoder.lm_head = lm_head
         elif decoder_type == 'fc':
@@ -215,11 +203,7 @@ class MPTFlamingo(nn.Module):
                 if head_type == 'deterministic':
                     lm_head = DeterministicDecoder(in_features, self.window_size, exit_dropout, lstm_dropout, dropout_mode, mlp_layernorm, lstm_layernorm, mlp_num_hidden_layers, lstm_num_layers=lstm_num_layers,
                         use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
-                        is_extra_exit=is_extra_exit, use_layerwise_projection=use_layerwise_projection, num_projection_layers=num_projection_layers, skip_connection=skip_connection, exit_list=exit_list)
-                elif head_type == 'gaussian':
-                    lm_head = GaussianDecoder(in_features, self.window_size, exit_dropout,
-                        use_diff=use_diff, last_action=last_action, fusion_mode=fusion_mode, use_state=use_state, return_feature=return_feature, multi_step_action=multi_step_action, pooling=pooling,
-                        tanh_squash_dist=tanh_squash_dist, state_dependent_std=state_dependent_std)
+                        is_extra_exit=is_extra_exit, exit_list=exit_list)
             elif decoder_type == 'fc':
                 if use_hist:
                     lm_head = FCDecoder(in_features, self.window_size, 
@@ -266,21 +250,18 @@ class MPTFlamingo(nn.Module):
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values())
 
                     
-        # extra one exit
-        self.use_extra_exit = use_extra_exit
-        self.detach_extra_exit = detach_extra_exit
+        # The exit for early-exit inference. We call it extra_exit in the code.
         self.layerwise_exit_eval = layerwise_exit_eval
 
-        if use_extra_exit:
-            if share_exit:
-                self.extra_exit = self.lm_head
-            else:
-                self.extra_exit = get_encoder(is_extra_exit=True, exit_list=self.get_all_exit_idx())
-        
-            if not self.layerwise_exit_eval:
-                print('eval the extra exit!') 
-            else:
-                print('eval layerwise exits!') 
+        if share_exit:
+            self.extra_exit = self.lm_head
+        else:
+            self.extra_exit = get_encoder(is_extra_exit=True, exit_list=self.get_all_exit_idx())
+    
+        if not self.layerwise_exit_eval:
+            print('eval the extra exit!') 
+        else:
+            print('eval layerwise exits!') 
 
         self.llm_inference_time = -1.0
         
@@ -304,8 +285,7 @@ class MPTFlamingo(nn.Module):
             for exit in self.lm_exit_modules:
                 exit.window_size = new_window_size
                 
-        if self.use_extra_exit:
-            self.extra_exit.window_size = new_window_size
+        self.extra_exit.window_size = new_window_size
                 
         return old_window_size
     
@@ -322,9 +302,8 @@ class MPTFlamingo(nn.Module):
                 exit.hidden_state = None
                 exit.history_memory = []
         
-        if self.use_extra_exit:
-            self.extra_exit.hidden_state = None
-            self.extra_exit.history_memory = []
+        self.extra_exit.hidden_state = None
+        self.extra_exit.history_memory = []
     
     def forward(
         self,
@@ -451,10 +430,7 @@ class MPTFlamingo(nn.Module):
                 torch.cuda.synchronize()
                 cur_time = time.time()
                 
-            if isinstance(head, GaussianDecoder):
-                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits, act=act, deterministic=deterministic)
-            else:
-                o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits, layer_indices=layer_indices)
+            o = head(in_feat, state_tensor=in_state, return_feature=return_feature, return_aggregate_feature=return_aggregate_feature, with_gripper_logits=with_gripper_logits, layer_indices=layer_indices)
             
             if eval_time:
                 torch.cuda.synchronize()
@@ -471,7 +447,7 @@ class MPTFlamingo(nn.Module):
             if exit_id < 0:
                 exit_id += self.lang_encoder.config.n_layers
             assert 0 <= exit_id < self.lang_encoder.config.n_layers
-            if self.use_extra_exit and not self.layerwise_exit_eval:
+            if not self.layerwise_exit_eval:
                 # only use the extra exit for inference
                 exit_head = self.extra_exit
             else:
@@ -498,53 +474,48 @@ class MPTFlamingo(nn.Module):
             
         
         # Learning with an arbitrary size of models
-        if self.use_extra_exit:
-            all_feats = torch.stack(output.hidden_states, dim=1) # (bs * action_seq_len, n_exit, lang_len, d)
-            # (bs * action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, n_exit, lang_len, d)
-            all_feats = all_feats.reshape(-1, self.window_size, *all_feats.shape[1:]) 
-            # (bs, action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, lang_len, d)
-            bs, action_seq_len, _ = all_feats.shape[:3]
-            exit_ids = self.get_all_exit_idx()
-            exit_num = self.get_exit_num()
-            
-            # Sampling Strategy 1
-            indices = torch.randint(0, exit_num, size=(bs, action_seq_len), device=all_feats.device)
-            in_indices1 = rand_layer_indices = torch.tensor([exit_ids[idx] for idx in indices.reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len)
-            
-            rand_layer_indices = rand_layer_indices.reshape(bs, action_seq_len, 1, 1, 1).expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
-            rand_layer_feat = torch.gather(all_feats, 2, rand_layer_indices).squeeze(2)     
-            # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
-            rand_layer_feat = rand_layer_feat.flatten(0, 1)
-            extra_exit_output = get_action(self.extra_exit, 
-                                            rand_layer_feat.detach() if self.detach_extra_exit else rand_layer_feat,
-                                            state_tensor, 
-                                            layer_indices=in_indices1
-                                            )
-            
-           # Sampling Strategy 2
-            prev_len = random.randint(1, action_seq_len)
-            indices = torch.randint(0, exit_num, size=(bs, 2), device=all_feats.device)
-            indices_list = [indices[:, 0] for _ in range(prev_len)] + [indices[:, 1] for _ in range(action_seq_len-prev_len)]
-            in_indices2 = indices = torch.tensor([exit_ids[idx] for idx in torch.stack(indices_list, dim=1).reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len)
-            indices = indices.reshape(bs, action_seq_len, 1, 1, 1).expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
-            two_layer_feat = torch.gather(all_feats, 2, indices).squeeze(2)     
-            # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
-            two_layer_feat = two_layer_feat.flatten(0, 1)
-            extra_exit_output2 = get_action(self.extra_exit, 
-                                            two_layer_feat.detach() if self.detach_extra_exit else two_layer_feat,
-                                            state_tensor,
-                                            layer_indices=in_indices2
-                                            )
-            
-    
-            
-            if return_in_feat:
-                return output, exit_outputs, extra_exit_output, rand_layer_feat, rand_layer_indices[:, :, 0, 0, 0]
-            else:
-                return output, exit_outputs, extra_exit_output, extra_exit_output2
+        all_feats = torch.stack(output.hidden_states, dim=1) # (bs * action_seq_len, n_exit, lang_len, d)
+        # (bs * action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, n_exit, lang_len, d)
+        all_feats = all_feats.reshape(-1, self.window_size, *all_feats.shape[1:]) 
+        # (bs, action_seq_len, n_exit, lang_len, d) -> (bs, action_seq_len, lang_len, d)
+        bs, action_seq_len, _ = all_feats.shape[:3]
+        exit_ids = self.get_all_exit_idx()
+        exit_num = self.get_exit_num()
+        
+        # Sampling Strategy 1
+        indices = torch.randint(0, exit_num, size=(bs, action_seq_len), device=all_feats.device)
+        in_indices1 = rand_layer_indices = torch.tensor([exit_ids[idx] for idx in indices.reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len)
+        
+        rand_layer_indices = rand_layer_indices.reshape(bs, action_seq_len, 1, 1, 1).expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
+        rand_layer_feat = torch.gather(all_feats, 2, rand_layer_indices).squeeze(2)     
+        # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
+        rand_layer_feat = rand_layer_feat.flatten(0, 1)
+        extra_exit_output = get_action(self.extra_exit, 
+                                        rand_layer_feat,
+                                        state_tensor, 
+                                        layer_indices=in_indices1
+                                        )
+        
+        # Sampling Strategy 2
+        prev_len = random.randint(1, action_seq_len)
+        indices = torch.randint(0, exit_num, size=(bs, 2), device=all_feats.device)
+        indices_list = [indices[:, 0] for _ in range(prev_len)] + [indices[:, 1] for _ in range(action_seq_len-prev_len)]
+        in_indices2 = indices = torch.tensor([exit_ids[idx] for idx in torch.stack(indices_list, dim=1).reshape(-1)], device=all_feats.device).reshape(bs, action_seq_len)
+        indices = indices.reshape(bs, action_seq_len, 1, 1, 1).expand(-1, -1, -1, all_feats.shape[3], all_feats.shape[4])
+        two_layer_feat = torch.gather(all_feats, 2, indices).squeeze(2)     
+        # (bs, action_seq_len, lang_len, d) -> (bs * action_seq_len, lang_len, d)
+        two_layer_feat = two_layer_feat.flatten(0, 1)
+        extra_exit_output2 = get_action(self.extra_exit, 
+                                        two_layer_feat,
+                                        state_tensor,
+                                        layer_indices=in_indices2
+                                        )
+        
+        if return_in_feat:
+            return output, exit_outputs, extra_exit_output, rand_layer_feat, rand_layer_indices[:, :, 0, 0, 0]
         else:
-            if len(self.lm_exits) > 0:
-                return output, exit_outputs            
+            return output, exit_outputs, extra_exit_output, extra_exit_output2
+           
         
         return output
         

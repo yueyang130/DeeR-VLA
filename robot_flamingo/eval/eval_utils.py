@@ -511,55 +511,6 @@ class ModelWrapper(CalvinBaseModel):
         return action
 
 
-def evaluate_policy(model, env, epoch, calvin_conf_path, eval_log_dir=None, debug=False, create_plan_tsne=False, diverse_inst=False):
-    """
-    Run this function to evaluate a model on the CALVIN challenge.
-
-    Args:
-        model: Must implement methods of CalvinBaseModel.
-        env: (Wrapped) calvin env.
-        epoch:
-        eval_log_dir: Path where to log evaluation results. If None, logs to /tmp/evaluation/
-        debug: If True, show camera view and debug info.
-        create_plan_tsne: Collect data for TSNE plots of latent plans (does not work for your custom model)
-
-    Returns:
-        Dictionary with results
-    """
-    conf_dir = Path(calvin_conf_path)
-    task_cfg = OmegaConf.load(conf_dir / "callbacks/rollout/tasks/new_playtable_tasks.yaml")
-    task_oracle = hydra.utils.instantiate(task_cfg)
-    if diverse_inst:
-        with open('./enrich_lang_annotations.json', 'r') as f:
-            val_annotations = json.load(f)
-    else:
-        val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
-
-    eval_log_dir = get_log_dir(eval_log_dir)
-
-    eval_sequences = get_sequences(NUM_SEQUENCES)
-
-    results = []
-    plans = defaultdict(list)
-
-    eval_sequences = tqdm(eval_sequences, position=0, leave=True)
-
-    for initial_state, eval_sequence in eval_sequences:
-        result = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, plans, debug)
-        results.append(result)
-        if not debug:
-            eval_sequences.set_description(
-                " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(count_success(results))]) + "|"
-            )
-
-    if create_plan_tsne:
-        create_tsne(plans, eval_log_dir, epoch)
-
-    print_and_save(results, eval_sequences, eval_log_dir, epoch)
-
-    return results
-
-
 def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, debug=False, create_plan_tsne=False, reset=False, diverse_inst=False):
     """
     Run this function to evaluate a model on the CALVIN challenge.
@@ -753,36 +704,8 @@ def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug, eva
         # check if current step solves a task
         current_task_info = task_oracle.get_task_info_for_set(start_info, current_info, {subtask})
         if len(current_task_info) > 0:
-            if debug:
-                # print(colored("success", "green"), end=" ")
-                # img_clip = ImageSequenceClip(img_queue, fps=30)
-                # img_clip.write_gif(os.path.join(eval_log_dir, f'{sequence_i}-{subtask_i}-{subtask}-succ.gif'), fps=30)
-                save_screenshot_with_exit_info(img_queue, exit_layers, sequence_i, subtask_i, subtask, 'success', eval_log_dir)
             return True, exit_layers, step+1, llm_time_list
-    if debug:
-        # print(colored("fail", "red"), end=" ")
-        # img_clip = ImageSequenceClip(img_queue, fps=30)
-        # img_clip.write_gif(os.path.join(eval_log_dir, f'{sequence_i}-{subtask_i}-{subtask}-fail.gif'), fps=30)
-         save_screenshot_with_exit_info(img_queue, exit_layers, sequence_i, subtask_i, subtask, 'fail', eval_log_dir)
     return False, exit_layers, step+1, llm_time_list
-
-def save_screenshot_with_exit_info(images, exit_layers, seq_id, subtask_id, subtask, success, eval_log_dir, freq=5):
-    assert len(images) == len(exit_layers)
-    save_dir = os.path.join(eval_log_dir, f'{seq_id}-{subtask_id}-{subtask}-{success}')
-    os.makedirs(save_dir, exist_ok=True)
-    for t, (img, exit_id) in enumerate(zip(images, exit_layers)):
-        if len(images) < 15 or t % freq == 0:
-            img_path = os.path.join(save_dir, f'{t}_{exit_id}.jpg')
-            img2 = Image.fromarray(img, 'RGB')
-            # Save the image to a file
-            img2.save(img_path)
-
-def eval_one_epoch_calvin(args, model, dataset_path, image_processor, tokenizer, future_act_len=-1):
-
-    env = make_env(dataset_path)
-    cast_dtype = get_cast_dtype(args.precision)
-    wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=args.n_obs_steps, future_act_len=future_act_len, amp=args.amp)
-    evaluate_policy(wrapped_model, env, 0, args.calvin_conf_path)
 
 
 def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokenizer, eval_log_dir=None, debug=False, future_act_len=-1, reset=False, diverse_inst=False, exit_controller=None):
@@ -799,18 +722,15 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
     
     if args.eval_exit_mode == 'last':   
         if args.rank == 0: 
-            if args.use_extra_exit:
-                print("\nEvaluate the extra exit with features from the last layer !\n")
+            print("\nEvaluate the exit with features from the last layer !\n")
         wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
         results = evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
         
     elif args.eval_exit_mode == 'all':
         torch.distributed.barrier()
         if args.rank == 0: 
-            if args.use_extra_exit:
-                print("\nEvaluate the extra exit with features from a fixed layer (i=0,1,2,..) !\n")
-            else:
-                print("\nEvaluate all exits by numerical order!\n")
+            print("\nEvaluate the exit with features from a fixed layer (i=0,1,2,..) !\n")
+
         for exit_id in reversed(model.module.get_all_exit_idx()):
             # if exit_id == 11: continue
             if args.rank == 0: print('#'*40 + '\n' + f'Evaluate the exit with exit_id={exit_id}!\n' + '#'*40 + '\n')
@@ -827,78 +747,6 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
         raise NotImplementedError
     
     return  results
-
-def main():
-    seed_everything(0, workers=True)  # type:ignore
-    parser = argparse.ArgumentParser(description="Evaluate a trained model on multistep sequences with language goals.")
-    parser.add_argument("--dataset_path", type=str, help="Path to the dataset root directory.")
-
-    # arguments for loading default model
-    parser.add_argument(
-        "--train_folder", type=str, help="If calvin_agent was used to train, specify path to the log dir."
-    )
-    parser.add_argument(
-        "--checkpoints",
-        type=str,
-        default=None,
-        help="Comma separated list of epochs for which checkpoints will be loaded",
-    )
-    parser.add_argument(
-        "--checkpoint",
-        type=str,
-        default=None,
-        help="Path of the checkpoint",
-    )
-    parser.add_argument(
-        "--last_k_checkpoints",
-        type=int,
-        help="Specify the number of checkpoints you want to evaluate (starting from last). Only used for calvin_agent.",
-    )
-
-    # arguments for loading custom model or custom language embeddings
-    parser.add_argument(
-        "--custom_model", action="store_true", help="Use this option to evaluate a custom model architecture."
-    )
-
-    parser.add_argument("--debug", action="store_true", help="Print debug info and visualize environment.")
-
-    parser.add_argument("--eval_log_dir", default=None, type=str, help="Where to log the evaluation results.")
-
-    parser.add_argument("--device", default=0, type=int, help="CUDA device")
-    args = parser.parse_args()
-
-    # evaluate a custom model
-    if args.custom_model:
-        model = CustomModel()
-        env = make_env(args.dataset_path)
-        evaluate_policy(model, env, debug=args.debug)
-    else:
-        assert "train_folder" in args
-
-        checkpoints = []
-        if args.checkpoints is None and args.last_k_checkpoints is None and args.checkpoint is None:
-            print("Evaluating model with last checkpoint.")
-            checkpoints = [get_last_checkpoint(Path(args.train_folder))]
-        elif args.checkpoints is not None:
-            print(f"Evaluating model with checkpoints {args.checkpoints}.")
-            checkpoints = get_checkpoints_for_epochs(Path(args.train_folder), args.checkpoints)
-        elif args.checkpoints is None and args.last_k_checkpoints is not None:
-            print(f"Evaluating model with last {args.last_k_checkpoints} checkpoints.")
-            checkpoints = get_all_checkpoints(Path(args.train_folder))[-args.last_k_checkpoints :]
-        elif args.checkpoint is not None:
-            checkpoints = [Path(args.checkpoint)]
-
-        env = None
-        for checkpoint in checkpoints:
-            epoch = checkpoint.stem.split("=")[1]
-            model, env, _ = get_default_model_and_env(
-                args.train_folder,
-                args.dataset_path,
-                checkpoint,
-                env=env,
-                device_id=args.device,
-            )
-            evaluate_policy(model, env, epoch, eval_log_dir=args.eval_log_dir, debug=args.debug, create_plan_tsne=True)
 
 
 def generate_zero_shot_instr():
