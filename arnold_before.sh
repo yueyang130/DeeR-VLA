@@ -101,7 +101,7 @@ cd $HOME_PATH/RoboFlamingo
 # for the error: module 'numpy' has no attribute 'float'
 pip install 'numpy==1.23'
 pip install thop fvcore
-pip install scikit-optimize
+pip install scikit-optimize # bayes opt
 pip install bitsandbytes accelerate
 
 # SimplerEnv

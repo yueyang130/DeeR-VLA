@@ -250,9 +250,9 @@ class MPTFlamingo(nn.Module):
             self.lm_exit_modules = nn.ModuleList(self.lm_exits.values())
 
                     
-        # The exit for early-exit inference. We call it extra_exit in the code.
         self.layerwise_exit_eval = layerwise_exit_eval
 
+        # The exit for early-exit inference. We call it extra_exit in the code.
         if share_exit:
             self.extra_exit = self.lm_head
         else:

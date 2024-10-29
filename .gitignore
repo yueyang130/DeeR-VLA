@@ -44,5 +44,6 @@ evaluate
 *.zip
 *.bin
 
+
 !arnold_before.sh
-!run*.sh
+# !run*.sh

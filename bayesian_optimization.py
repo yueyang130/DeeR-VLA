@@ -30,9 +30,13 @@ parser.add_argument("--evaluate_from_checkpoint", type=str)
 parser.add_argument("--acq_func", type=str, default='EI', choices=['EI', 'LCB', 'PI'])
 parser.add_argument('--n_calls', type=int)
 parser.add_argument('--init_exit_ratio', type=float)
-parser.add_argument('--seed', type=int, default=0)
+parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--port', type=int)
 args = parser.parse_args()
+
+assert os.environ['calvin_dataset_path'] and os.environ['calvin_conf_path'], "PLEASE SET CAVLIN DATASET PATH and CONFIG PATH!"
+args.calvin_dataset = os.environ['calvin_dataset_path']
+args.calvin_conf_path = os.environ['calvin_conf_path']
 
 
 ckpt_dir, ckpt_name = os.path.split(args.evaluate_from_checkpoint)
@@ -45,24 +49,19 @@ iter_num = 0
 log_file = log_dir + f'seq{args.num_seq}_{args.acq_func}_seed{args.seed}_' + ckpt_name[:-4] + f'_iter{str(iter_num)}' + '.log'
 print(f'{log_file=}')
 
-# solve thresholds with exp distribution with a validation datast to get init point
+# solve thresholds with exp distribution with a validation datast to get initial point for bayesian optimization
 if not os.path.exists(log_file):
     os.system(f"""
         torchrun --nnodes=1 --nproc_per_node=$ARNOLD_WORKER_GPU  --master_port={args.port} robot_flamingo/eval/eval_calvin.py \
         --precision fp32 \
         --use_gripper \
-        --window_size 12 \
-        --fusion_mode post \
-        --run_name RobotFlamingoDBG \
-        --calvin_dataset /mnt/bn/yueyang/archive/calvin/dataset/task_D_D \
+        --run_name DeeR \
+        --calvin_dataset {args.calvin_dataset} \
         --cross_attn_every_n_layers 4 \
         --evaluate_from_checkpoint {args.evaluate_from_checkpoint} \
-        --calvin_conf_path /mnt/bn/yueyang/archive/calvin/calvin_models/conf \
-        --amp true \
-        --eval_exit_mode dynamic \
+        --calvin_conf_path {args.calvin_conf_path} \
+        --amp 1 \
         --exit_ratio {args.init_exit_ratio} \
-        --value_type action \
-        --threshold_type L2 --exit_dist exp \
         --num_seq {args.num_seq} \
         --validation_set \
         --workers 1 > {log_file} 2>&1
@@ -73,7 +72,11 @@ with open(log_file, 'r') as file:
     thresholds_str = lines[-3]
     init_thresholds = list(map(float, thresholds_str.split(',')))
     init_avg_len = float(lines[-2])  
-    init_avg_exit = budget = float(lines[-1])
+    # set the FLOPs of the running using demonstration dataset as budget constraint,
+    # such that the search result by bayesian should cost less FLOPs than threshold only using demonstration dataset.
+    # You can set other values manually. PLEASE that here all values represents the average exit layer.  
+    # Average exit layer * FLOPS per layer = Average FLOPs
+    init_avg_exit = budget = float(lines[-1]) 
     
 print('exp result:')
 print(init_thresholds)
@@ -81,27 +84,21 @@ print(init_avg_len)
 print(init_avg_exit)
 
 
-# get existing observations
+# get existing observations as other initial points
 x0, y0 = [init_thresholds[:-1]], [-init_avg_len]
 from pathlib import Path
 for log in Path(log_dir).glob('*.log'):
     if 'iter0.log' in str(log): continue
     try:
         thresholds, avg_len, avg_exit = get_observation(log)
-        score = get_score(avg_len, avg_exit)
-        
-        # print(log)
-        # print(f'{thresholds=}')
-        # print(f'{avg_len=}')
-        # print(f'{avg_exit=}')
-        
+        score = get_score(avg_len, avg_exit)     
         x0.append(thresholds[:-1])
         y0.append(score)
     except:
         print(f'Error when parsing {log}')
         pass
     
-
+# define search space
 space = [
     Real(init_thresholds[0]-0.02, init_thresholds[0]+0.02, name='t0'),
     Real(init_thresholds[1]-0.002, init_thresholds[1]+0.002, name='t1'),
@@ -134,18 +131,13 @@ def objective_function(t0, t1, t2, t3, t4):
         torchrun --nnodes=1 --nproc_per_node=$ARNOLD_WORKER_GPU  --master_port={args.port} robot_flamingo/eval/eval_calvin.py \
         --precision fp32 \
         --use_gripper \
-        --window_size 12 \
-        --fusion_mode post \
-        --run_name RobotFlamingoDBG \
-        --calvin_dataset /mnt/bn/yueyang/archive/calvin/dataset/task_D_D \
+        --run_name DeeR \
+        --calvin_dataset {args.calvin_dataset} \
         --cross_attn_every_n_layers 4 \
         --evaluate_from_checkpoint {args.evaluate_from_checkpoint} \
-        --calvin_conf_path /mnt/bn/yueyang/archive/calvin/calvin_models/conf \
-        --amp true \
-        --eval_exit_mode dynamic \
+        --calvin_conf_path {args.calvin_conf_path} \
+        --amp 1 \
         --thresholds {t0} {t1} {t2} {t3} {t4} {t5} \
-        --value_type action \
-        --threshold_type L2 --exit_dist exp \
         --num_seq {args.num_seq} \
         --validation_set \
         --workers 1 > {log_file} 2>&1

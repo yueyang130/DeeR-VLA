@@ -15,7 +15,6 @@ from fvcore.nn import FlopCountAnalysis
 # This is for using the locally installed repo clone when using slurm
 from calvin_agent.models.calvin_base_model import CalvinBaseModel
 sys.path.insert(0, Path(__file__).absolute().parents[2].as_posix())
-from fvcore.nn import FlopCountAnalysis
 
 from calvin_agent.evaluation.multistep_sequences import get_sequences
 from calvin_agent.evaluation.utils import (
@@ -26,7 +25,6 @@ from calvin_agent.evaluation.utils import (
     get_log_dir,
     join_vis_lang,
 )
-from calvin_agent.utils.utils import get_all_checkpoints, get_checkpoints_for_epochs, get_last_checkpoint
 import hydra
 import numpy as np
 from omegaconf import OmegaConf
@@ -41,7 +39,6 @@ from robot_flamingo.data.data import preprocess_image, preprocess_text_calvin
 from robot_flamingo.utils import world_to_tcp_frame, tcp_to_world_frame
 import functools
 # os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
-import pyrender
 logger = logging.getLogger(__name__)
 
 EP_LEN = 360
@@ -75,8 +72,6 @@ def print_and_save(results, success_exit_results, fail_exit_results, step_result
     current_data = {}
     print(f"Results for Epoch {epoch}:")
     step_results = np.array(step_results)
-    print(step_results.shape)
-    print(step_results)
     avg_seq_len = np.mean(results)
     chain_sr = {i + 1: sr for i, sr in enumerate(count_success(results))}
     print(f"Average successful sequence length: {avg_seq_len}")
@@ -88,16 +83,15 @@ def print_and_save(results, success_exit_results, fail_exit_results, step_result
     success_layer_ratio = count_exit_ratio(success_exit_results, n_layer)
     fail_layer_ratio = count_exit_ratio(fail_exit_results, n_layer)
     print(f"Early Exit (success tasks) | Total steps : {len(success_exit_results)} | VLM n_layer: {n_layer} | Average : {np.mean(success_exit_results)+1:.1f} | Min : {np.min(success_exit_results)+1} | Max : {np.max(success_exit_results)+1} | AVG LLM time: {np.mean(success_llm_time_list)*1000:.1f}ms")
-    print(f"Early Exit (fail tasks) | Total steps : {len(fail_exit_results)} | VLM n_layer: {n_layer} | Average : {np.mean(fail_exit_results)+1:.1f} | Min : {np.min(fail_exit_results)+1} | Max : {np.max(fail_exit_results)+1} | AVG LLM time: {np.mean(fail_llm_time_list)*1000:.1f}ms")
-    
+    # print(f"Early Exit (fail tasks) | Total steps : {len(fail_exit_results)} | VLM n_layer: {n_layer} | Average : {np.mean(fail_exit_results)+1:.1f} | Min : {np.min(fail_exit_results)+1} | Max : {np.max(fail_exit_results)+1} | AVG LLM time: {np.mean(fail_llm_time_list)*1000:.1f}ms")
     print(f"Total Successful steps: {np.sum(step_results)} | Avg steps per successful subtask: {np.mean(step_results):.1f} | Min: {np.min(step_results)} | Max: {np.max(step_results)}")
     
     print("Early exit rates for layer i in successful tasks:")
     for i, exit_ratio in enumerate(success_layer_ratio):
         print(f'{i+1}: {exit_ratio * 100:.1f}%')
-    print("Early exit rates for layer i in failed tasks:")
-    for i, exit_ratio in enumerate(fail_layer_ratio):
-        print(f'{i+1}: {exit_ratio * 100:.1f}%')
+    # print("Early exit rates for layer i in failed tasks:")
+    # for i, exit_ratio in enumerate(fail_layer_ratio):
+    #     print(f'{i+1}: {exit_ratio * 100:.1f}%')
 
     cnt_success = Counter()
     cnt_fail = Counter()
@@ -120,20 +114,6 @@ def print_and_save(results, success_exit_results, fail_exit_results, step_result
 
     current_data[epoch] = data
 
-    print()
-    previous_data = {}
-    try:
-        with open(log_dir / "results.json", "r") as file:
-            previous_data = json.load(file)
-    except FileNotFoundError:
-        pass
-    json_data = {**previous_data, **current_data}
-    with open(log_dir / "results.json", "w") as file:
-        json.dump(json_data, file)
-    print(
-        f"Best model: epoch {max(json_data, key=lambda x: json_data[x]['avg_seq_len'])} "
-        f"with average sequences length of {max(map(lambda x: x['avg_seq_len'], json_data.values()))}"
-    )
     
     return avg_seq_len, np.mean(success_exit_results)+1
 
@@ -159,7 +139,6 @@ def check_loaded_parameters(model, checkpoint):
     # missing_keys = model_keys - checkpoint_keys
     # if missing_keys and torch.distributed.get_rank() == 0:
     #     print(f'Warning: {len(missing_keys)} keys in the model were not found in the checkpoint: {missing_keys}')
-
 
 
 def make_env(dataset_path):
@@ -720,25 +699,7 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
     elif args.pad_length != -1:
         hist_len = args.pad_length
     
-    if args.eval_exit_mode == 'last':   
-        if args.rank == 0: 
-            print("\nEvaluate the exit with features from the last layer !\n")
-        wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=-1, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
-        results = evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
-        
-    elif args.eval_exit_mode == 'all':
-        torch.distributed.barrier()
-        if args.rank == 0: 
-            print("\nEvaluate the exit with features from a fixed layer (i=0,1,2,..) !\n")
-
-        for exit_id in reversed(model.module.get_all_exit_idx()):
-            # if exit_id == 11: continue
-            if args.rank == 0: print('#'*40 + '\n' + f'Evaluate the exit with exit_id={exit_id}!\n' + '#'*40 + '\n')
-            wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, exit_id=exit_id, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
-            results = evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
-            torch.distributed.barrier() # don't conduct next eval until all threads reach
-    
-    elif args.eval_exit_mode == 'dynamic':
+    if args.eval_exit_mode == 'dynamic':
         if args.rank == 0: print("\nEvaluate with dynamic exit!\n")
         wrapped_model = ModelWrapper(model, tokenizer, image_processor, cast_dtype, args.head_type=="diffusion", history_len=hist_len, future_act_len=future_act_len, amp=args.amp, early_exit=True, exit_controller=exit_controller, multi_execution=args.multi_execution, use_action_ensemble=args.use_action_ensemble)
         results = evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)

@@ -278,6 +278,7 @@ class BaseCalvinDataset(Dataset):
             or "training" in self.abs_datasets_dir.as_posix()
         )
         self.validation = "validation" in self.abs_datasets_dir.as_posix()
+        print(self.abs_datasets_dir)
         assert self.abs_datasets_dir.is_dir()
         logger.info(f"loading dataset at {self.abs_datasets_dir}")
         logger.info(f"use {data_percent*100:.1}% data in dataset")

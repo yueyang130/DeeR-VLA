@@ -326,14 +326,14 @@ def main():
     )
     
     # multi-exit eval
-    parser.add_argument("--eval_exit_mode", type=str, default='last') # [last/all/dynamic] eval the last exit / all exits / dynamic exit mechanism
+    parser.add_argument("--eval_exit_mode", type=str, default='dynamic') # [last/all/dynamic] eval the last exit / all exits / dynamic exit mechanism
     parser.add_argument("--layerwise_exit_eval", type=int, default=0) 
     # timestep dynamic
     parser.add_argument("--multi_execution", type=int, default=1, help="how many actions are executed in one time when predicting multiple actions; if only one predicted action, repeat it K times")
     # dynamic early-exit
     parser.add_argument("--value_type", type=str, default='action')
-    parser.add_argument("--threshold_type", type=str, default='mean') # for action delta [mean / L2 / max]
-    parser.add_argument("--exit_dist", type=str, default='') # for exit dist [exp / gauss / gamma]
+    parser.add_argument("--threshold_type", type=str, default='L2') # for action delta [mean / L2 / max]
+    parser.add_argument("--exit_dist", type=str, default='exp') # for exit dist [exp / gauss / gamma]
     parser.add_argument("--value_net_ckpt", type=str, default=None) 
     parser.add_argument("--max_layer", type=int, default=None)
     parser.add_argument("--exit_ratio", type=float, default=1.0, help="decide the exit thresholds")
@@ -351,7 +351,6 @@ def main():
     print(f'{args.precision=}')
     print(f'{args.eval_exit_mode=}')
     print(f'{args.load_threshold=}')
-    print(f'{args.layerwise_exit_eval=}')
     
     args.batch_size_calvin = 16
     if 'state' in args.evaluate_from_checkpoint:
@@ -643,6 +642,7 @@ def main():
     )
     
     torch.distributed.barrier()
+    # info for bayesian optimization
     if args.rank == 0: 
         time.sleep(20) # wait all output are written the log file
         thresholds = ddp_exit_controller.module.thresholds
