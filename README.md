@@ -4,203 +4,336 @@
 <div align="center">
   <img src="assets/images/deer.png" width="30%"/>
 </div>
-<!-- <div align="center">
-  <img src="assets/images/icon-name.png" width="80%"/>
-</div> -->
 
-<h1 align="center">DeeR-VLA: Dynamic Inference of Multimodal Large Language Models for Efficient Robot Execution
-</h1>
+<h1 align="center">DeeR-VLA: Dynamic Inference of Multimodal Large Language Models for Efficient Robot Execution</h1>
 
 
+<p align="center">
+    <a href="http://yueyang130.github.io/">Yang Yue<sup>1</sup></a> &emsp;
+    <a href="https://www.wyl.cool/">Yulin Wang<sup>1</sup></a> &emsp;
+    <a href="https://bingykang.github.io/">Bingyi Kang<sup>2</sup></a> &emsp;
+    <a href="https://yizenghan.top/">Yizeng Han<sup>1</sup></a> &emsp;
+    <a href="https://shenzhi-wang.netlify.app/">Shenzhi Wang<sup>1</sup></a> &emsp;
+    <a href="https://scholar.google.com/citations?user=rw6vWdcAAAAJ&hl=zh-TW">Shiji Song<sup>1</sup></a> &emsp;
+    <a href="https://sites.google.com/site/jshfeng/">Jiashi Feng<sup>2</sup></a> &emsp;
+    <a href="https://www.gaohuang.net/">Gao Huang<sup>1</sup></a>
+</p>
+<p align="center">
+    <sup>1</sup>Tsinghua University &emsp;
+    <sup>2</sup>ByteDance Research
+</p>
 
 ![Python 3.8](https://img.shields.io/badge/Python-3.8-blue)
-[![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/abs/2311.01378)
-[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-blue)](https://huggingface.co/roboflamingo/RoboFlamingo)
+[![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/pdf/2411.02359)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-blue)](https://huggingface.co/Yang130/DeeR-VLA/tree/main)
 
-![RoboFlamingo](/assets/images/framework.png)
+<!-- <p align="center">
+  <a href="#installation">Installation</a> •
+  <a href="#pretrained-models">Pre-trained Models</a> •
+  <a href="#dynamic-inference">Dynamic Inference</a> •
+  <a href="#training">Training</a>
+</p> -->
 
-**RoboFlamingo** is a pre-trained-VLM-based robotics learning framework that learns a wide variety of language-conditioned robot skills by fine-tuning on offline free-form imitation datasets. 
-By exceeding the state-of-the-art performance with a large margin on the CALVIN benchmark, we show that RoboFlamingo can be an effective and competitive alternative to adapt VLMs to robot control.
-Our extensive experimental results also reveal several interesting conclusions regarding the behavior of different pre-trained VLMs on manipulation tasks.
-**RoboFlamingo can be trained or evaluated on a single GPU server** (GPU mem requirements depend on the model size), and we believe RoboFlamingo has the potential to be a cost-effective and easy-to-use solution for robotics manipulation, empowering everyone with the ability to fine-tune their own robotics policy.
 
-***
+## Overview
 
-This is also the official code repo for the paper [Vision-Language Foundation Models as Effective Robot Imitators](https://arxiv.org/abs/2311.01378).
 
-All our experiments are conducted on a single GPU server with 8 Nvidia A100 GPUs (80G).
+This is also the official code repository for the paper [DeeR-VLA](https://arxiv.org/pdf/2411.02359).
 
-Pre-trained models are available on [Hugging Face](https://huggingface.co/roboflamingo/RoboFlamingo).
+DeeR-VLA is a framework for dynamic inference of multimodal large language models (MLLMs) designed specifically for efficient robot execution. Developing MLLMs for real-world robots is challenging due to the typically limited computation and memory capacities available on robotic platforms. DeeR-VLA addresses this challenge by implementing a Dynamic Early-Exit strategy that automatically adjusts the size of the activated MLLM based on the complexity of each situation. This approach leverages a multi-exit architecture, allowing the model to terminate processing once an appropriate size has been activated, thus avoiding redundant computation. DeeR-VLA also incorporates novel algorithms to establish early-termination criteria based on predefined demands such as average computational cost, peak computational consumption, and GPU memory usage. On the CALVIN robot manipulation benchmark, DeeR demonstrates significant reductions in computational costs of LLM by 5.2-6.5x and GPU memory of LLM by 2-6x without compromising performance. 
 
-## Usage
-### Initializing a RoboFlamingo model
-We support pre-trained vision encoders from the [OpenCLIP](https://github.com/mlfoundations/open_clip) package, which includes OpenAI's pre-trained models. 
-We also support pre-trained language models from the `transformers` package, such as [MPT](https://huggingface.co/models?search=mosaicml%20mpt), [RedPajama](https://huggingface.co/models?search=redpajama), [LLaMA](https://huggingface.co/models?search=llama), [OPT](https://huggingface.co/models?search=opt), [GPT-Neo](https://huggingface.co/models?search=gpt-neo), [GPT-J](https://huggingface.co/models?search=gptj), and [Pythia](https://huggingface.co/models?search=pythia) models.
+### Performance on CALVIN Benchmark
 
-``` python
-from robot_flamingo.factor import create_model_and_transforms
+<div align="center">
+  <img src="assets/images/table2.png" width="100%"/>
+</div>
+<div align="center">
+  <img src="assets/images/figure3.png" width="100%"/>
+</div>
 
-model, image_processor, tokenizer = create_model_and_transforms(
-    clip_vision_encoder_path="ViT-L-14",
-    clip_vision_encoder_pretrained="openai",
-    lang_encoder_path="PATH/TO/LLM/DIR",
-    tokenizer_path="PATH/TO/LLM/DIR",
-    cross_attn_every_n_layers=1,
-    decoder_type='lstm',
-)
-```
-The `cross_attn_every_n_layers` argument controls how often cross-attention layers are applied and should be consistent with the VLM. The `decoder_type` argument controls the type of the decoder, currently we support `lstm`, `fc`, `diffusion` and `GPT`.
+## Installation
 
-## Performance
-We report results on the [CALVIN](https://github.com/mees/calvin) benchmark.
-| Method                   | Training Data            | Test Split                 | 1          | 2          | 3          | 4          | 5          | Avg Len |
-|--------------------------|--------------------------|----------------------------|------------|------------|------------|------------|------------|---------|
-| MCIL                     | ABCD (Full)              | D                          | 0.373      | 0.027      | 0.002      | 0.000      | 0.000      | 0.40    |
-| HULC                     | ABCD (Full)              | D                          | 0.889      | 0.733      | 0.587      | 0.475      | 0.383      | 3.06    |
-| HULC (retrained)         | ABCD (Lang)              | D                          | 0.892      | 0.701      | 0.548      | 0.420      | 0.335      | 2.90    |
-| RT-1 (retrained)         | ABCD (Lang)              | D                          | 0.844      | 0.617      | 0.438      | 0.323      | 0.227      | 2.45    |
-| Ours                     | ABCD (Lang)              | D                          | **0.964**  | **0.896**  | **0.824**  | **0.740**  | **0.66**   | **4.09**|
-| MCIL                     | ABC (Full)               | D                          | 0.304      | 0.013      | 0.002      | 0.000      | 0.000      | 0.31    |
-| HULC                     | ABC (Full)               | D                          | 0.418      | 0.165      | 0.057      | 0.019      | 0.011      | 0.67    |
-| RT-1 (retrained)         | ABC (Lang)               | D                          | 0.533      | 0.222      | 0.094      | 0.038      | 0.013      | 0.90    |
-| Ours                     | ABC (Lang)               | D                          | **0.824**  | **0.619**  | **0.466**  | **0.331**  | **0.235**  | **2.48**|
-| HULC                     | ABCD (Full)              | D (Enrich)                 | 0.715      | 0.470      | 0.308      | 0.199      | 0.130      | 1.82    |
-| RT-1 (retrained)         | ABCD (Lang)              | D (Enrich)                 | 0.494      | 0.222      | 0.086      | 0.036      | 0.017      | 0.86    |
-| Ours                     | ABCD (Lang)              | D (Enrich)                 | 0.720      | 0.480      | 0.299      | 0.211      | 0.144      | 1.85    |
-| Ours (freeze-emb)        | ABCD (Lang)              | D (Enrich)                 | **0.737**  | **0.530**  | **0.385**  | **0.275**  | **0.192**  | **2.12**|
+1. Install [CALVIN](https://github.com/mees/calvin) simulator in your python environment following the instructions. Then download dataset `D`, `ABC`, and `ABCD`.  
 
-## Prerequisite:
-### Step 0
-Follow the instructions in the [OpenFlamingo](https://github.com/mlfoundations/open_flamingo) and [CALVIN](https://github.com/mees/calvin) to download the necessary dataset and VLM pretrained Models. 
-
-Download the [CALVIN](https://github.com/mees/calvin) dataset, choose a split with:
+2. Clone DeeR-VLA:
 ```bash
-cd $HULC_ROOT/dataset
-sh download_data.sh D | ABC | ABCD | debug
+git clone https://github.com/your-username/DeeR-VLA.git
+cd DeeR-VLA
 ```
 
-Download the released [OpenFlamingo](https://github.com/mlfoundations/open_flamingo) models:
-|# params|Language model|Vision encoder|Xattn interval*|COCO 4-shot CIDEr|VQAv2 4-shot Accuracy|Avg Len|Weights|
-|------------|--------------|--------------|----------|-----------|-------|-----|----|
-|3B| anas-awadalla/mpt-1b-redpajama-200b | openai CLIP ViT-L/14 | 1 | 77.3 | 45.8 | 3.94 |[Link](https://huggingface.co/openflamingo/OpenFlamingo-3B-vitl-mpt1b)|
-|3B| anas-awadalla/mpt-1b-redpajama-200b-dolly | openai CLIP ViT-L/14 | 1 | 82.7 | 45.7 | 4.09 | [Link](https://huggingface.co/openflamingo/OpenFlamingo-3B-vitl-mpt1b-langinstruct)|
-|4B| togethercomputer/RedPajama-INCITE-Base-3B-v1 | openai CLIP ViT-L/14 | 2 | 81.8 | 49.0 | 3.67 | [Link](https://huggingface.co/openflamingo/OpenFlamingo-4B-vitl-rpj3b)|
-|4B| togethercomputer/RedPajama-INCITE-Instruct-3B-v1 | openai CLIP ViT-L/14 | 2 | 85.8 | 49.0 | 3.79 | [Link](https://huggingface.co/openflamingo/OpenFlamingo-4B-vitl-rpj3b-langinstruct)|
-|9B| anas-awadalla/mpt-7b | openai CLIP ViT-L/14 | 4 | 89.0 | 54.8 | 3.97 | [Link](https://huggingface.co/openflamingo/OpenFlamingo-9B-vitl-mpt7b)|
-
-Replace the `${lang_encoder_path}` and `${tokenizer_path}` of the path dictionary (e.g., `mpt_dict`) in `robot_flamingo/models/factory.py` for each pretrained VLM with your own paths.
-
-### Step 1
-Clone this repo
-```
-git clone https://github.com/RoboFlamingo/RoboFlamingo.git
-```
-Install the required packages:
-```
-cd RoboFlamingo
-conda create -n RoboFlamingo python=3.8
-source activate RoboFlamingo
+3. Install dependencies in virtual environment:
+```bash
 pip install -r requirements.txt
 ```
+4. Download the following models from Hugging Face. The OpenFlamingo framework is built on the MPT language model:
+   - OpenFlamingo-3B-vitl-mpt1b-langinstruct: [OpenFlamingo-3B](https://huggingface.co/openflamingo/OpenFlamingo-3B-vitl-mpt1b-langinstruct)
+   - MPT-1B-instruct: [MPT-1B](https://huggingface.co/mosaicml/mpt-1b-redpajama-200b-dolly)
+  
+    For optional 9B experiments, download:
+   - OpenFlamingo-9B-vitl-mpt7b: [OpenFlamingo-9B](https://huggingface.co/openflamingo/OpenFlamingo-9B-vitl-mpt7b)
+   - MPT-7B: [MPT-7B](https://huggingface.co/mosaicml/mpt-7b)
 
-## Training the model (using DDP):
+    Next, update the path variables in the `mpt_dict` dictionary located in `robot_flamingo/models/factory.py`:
+   - Replace `lang_encoder_path` and `tokenizer_path` with your local paths for each pretrained MPT directory.
+   - Update `$openflamingo_checkpoint` with the path to your OpenFlamingo `.pt` file.
+
+6. Replace the standard LLM Transformer model definition files with early-exit ones by running the following commands:
+  ```bash
+    cp mosaic_gpt_3b.py ${MPT-1B-INSTRUCT_DIR}/mosaic_gpt.py
+    cp modeling_gpt_9b.py ${MPT-7B_DIR}/modeling_gpt.py
+  ```
+
+### Common Errors
+
+- For the error: module 'numpy' has no attribute 'float', run:
+  ```bash
+  pip install 'numpy==1.23'
+  ```
+
+- For the error "ImportError: cannot import name 'gcd' from 'fractions' (/usr/lib/python3.9/fractions.py)", run:
+  ```bash
+  pip install --upgrade networkx
+  ```
+
+
+## Dynamic Inference with Pretrained Models
+
+### 1. Download Models
+Download pretrained models from Huggingface [Yang130/DeeR-VLA](https://huggingface.co/Yang130/DeeR-VLA/tree/main)
+
+- Task D model: `DeeR_task_D_D-exit-strategy`
+- Tasks ABC model: `DeeR_task_ABC_D-exit-strategy`
+- Tasks ABCD model: `DeeR_task_ABCD_D-exit-strategy`
+- 9B Task D model: `DeeR_9B_task_D_D-exit-strategy`
+
+### 2. Execute with Demonstration Dataset Thresholds. 
+
+To reproduce the results presented in Table 2 of the paper for `DeeR (ours)`, execute the commands below. The average exit and successful length are logged at the end of the log file. The average GFLOPs can be obtained as described in Appendix A.2 of the paper.
+
+```bash
+# D 
+python3 eval_ckpts.py --ckpt_dir DeeR_task_D_D-exit-strategy \
+        --node_num 8 --amp 1 --exit_ratio 0.8 --num_seq 224 --max_layer 12
+
+# ABC
+python3 eval_ckpts.py --ckpt_dir DeeR_task_ABC_D-exit-strategy \
+        --node_num 8 --amp 1 --exit_ratio 1.5 --num_seq 224 --max_layer 12
+
+# ABCD
+python3 eval_ckpts.py --ckpt_dir DeeR_task_ABCD_D-exit-strategy \
+        --node_num 8 --amp 1 --exit_ratio 1.0 --num_seq 224 --max_layer 12
 ```
-torchrun --nnodes=1 --nproc_per_node=8 --master_port=6042 robot_flamingo/train/train_calvin.py \
+
+- `max_layer`: The maximum number of layers used for inference. For the 3B model with 24 layers, `12` corresponds to DeeR-B, while `4` corresponds to DeeR-S. For the 9B model, `12` is for DeeR-B and `8` is for DeeR-S. Reducing this value results in lower GPU memory usage and maximum GFLOPs.
+- `node_num`: Indicates the number of threads and GPUs utilized for parallel evaluation.
+- `num_seq`: The number of task chains for evaluation, defaulting to 224. You can set it to 1000 for a more comprehensive evaluation. Using 8 V100 GPUs takes approximately 4-5 hours for 1000 evaluations.
+- `exit_ratio`: Determines the fraction of samples that exit at different stages. Lowering this value leads to a higher number of samples exiting earlier, resulting in less computation cost. The curves shown in Fig. 3 and 4 in our paper are generated by modifying this parameter and getting the average GFLOPs and successful lengths at various points.
+
+
+### 3. Execute with Online Interaction Thresholds
+First set:
+```
+# set parallel GPU
+export ARNOLD_WORKER_GPU=8
+export calvin_dataset_path='YOUR_PATH/calvin/dataset/task_D_D'
+export calvin_conf_path="YOUR_PATH/calvin/calvin_models/conf"
+```
+You can run with optimized thresholds obtained through Bayesian optimization to reproduce the results presented in Table 2 of the paper for `DeeR (online)`.
+```bash
+# D 
+export evaluate_from_checkpoint="DeeR_task_D_D-exit-strategy/stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth"
+export thresholds="0.024131965307197703 0.0034394217427938887 0.00701889456063509 0.009184207905083895 0.0045967466905420615 100000.0"
+export log_file='log_DeeR_task_D_D-exit-strategy/online_threshold_eval.log'
+
+# ABC 
+export evaluate_from_checkpoint="DeeR_task_ABC_D-exit-strategy/stg=post_4+1_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth"
+export thresholds="0.05618929907679558 0.003506983596128319 0.00584903010905957 0.006535238670344992 0.005207180260029222 100000.0"
+export log_file='log_DeeR_task_ABC_D-exit-strategy/online_threshold_eval.log'
+
+# ABCD 
+export evaluate_from_checkpoint="DeeR_task_ABCD_D-exit-strategy/stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth"
+export thresholds="0.03354664587378331 0.002466938924360549 0.006321195199122956 0.005748750398084137 0.007737060680985451 100000.0"
+export log_file='log_DeeR_task_ABCD_D-exit-strategy/online_threshold_eval.log'
+
+```
+
+Then run:
+
+```
+torchrun --nnodes=1 --nproc_per_node=$ARNOLD_WORKER_GPU  --master_port=12348 robot_flamingo/eval/eval_calvin.py \
+    --precision fp32 \
+    --use_gripper \
+    --run_name DeeR \
+    --calvin_dataset $calvin_dataset_path \
+    --cross_attn_every_n_layers 4 \
+    --calvin_conf_path $calvin_conf_path \
+    --amp 1 \
+    --evaluate_from_checkpoint $evaluate_from_checkpoint \
+    --thresholds $thresholds \
+    --num_seq 224 \
+    --validation_set \
+    --workers 1 > $log_file 2>&1
+
+```
+
+### 4. Search Thresholds via Online Interaction
+
+If you want to search for thresholds using Bayesian Optimization yourself, run the following command. Note that this may take a long time:
+```bash
+python3 bayesian_optimization.py --acq_func LCB --seed 0 --num_seq 224  --n_calls 20 --init_exit_ratio 0.82 --port 12345 \
+    --evaluate_from_checkpoint DeeR_task_D_D-exit-strategy/stg=post_4+5_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_7.pth
+
+python3 bayesian_optimization.py --acq_func EI --seed 1 --num_seq 224  --n_calls 20 --init_exit_ratio 1.2 --port 12345 \
+    --evaluate_from_checkpoint DeeR_task_ABC_D-exit-strategy/stg=post_4+1_layer_11_multie_intv=2_extrae_nodth_reg_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_4.pth
+
+python3 bayesian_optimization.py --acq_func EI --seed 1 --num_seq 224  --n_calls 20 --init_exit_ratio 1.0 --port 12345 \
+    --evaluate_from_checkpoint DeeR_task_ABCD_D-exit-strategy/stg=post_3+1_layer_11_multie_intv=2_extrae_nodth_reg_mlpdrp=0.5_layerwise_lstmdrp=0.4_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_3.pth
+
+```
+
+## Training
+
+Train based on 3B model for task D->D:
+```
+torchrun --nnodes=1 --nproc_per_node=8 --master_port=6046 robot_flamingo/train/train_calvin_post_strategy.py \
     --report_to_wandb \
     --llm_name mpt_dolly_3b \
     --traj_cons \
     --use_gripper \
-    --fusion_mode post \
-    --rgb_pad 10 \
-    --gripper_pad 4 \
-    --precision fp32 \
-    --num_epochs 5 \
-    --gradient_accumulation_steps 1 \
-    --batch_size_calvin 6 \
-    --run_name RobotFlamingoDBG \
-    --calvin_dataset ${calvin_dataset_path} \
-    --lm_path ${lm_path} \
-    --tokenizer_path ${tokenizer_path} \
-    --openflamingo_checkpoint ${openflamingo_checkpoint} \
-    --cross_attn_every_n_layers 4 \
-    --dataset_resampled \
-    --loss_multiplier_calvin 1.0 \
-    --workers 1 \
-    --lr_scheduler constant \
-    --warmup_steps 5000 \
-    --learning_rate 1e-4 \
-    --save_every_iter 10000 \
     --from_scratch \
-    --window_size 12 > ${log_file} 2>&1
+    --run_name DeeR_task_D_D-exit-strategy \
+    --calvin_dataset /YOUR_PATH/calvin/dataset/task_D_D \
+    --dataset_resampled \
+    --window_size 12 \
+    --workers 1 \
+    --batch_size_calvin 4 \
+    --num_joint_epochs 4 --num_exit_epochs 4  \
+    --exit_warmup_steps 2500 --joint_warmup_steps 2500 \
+    --joint_lr_scheduler constant --exit_lr_scheduler constant  \
+    --joint_learning_rate 1e-4 --exit_lr_scale 0.25 \
+    --exit_learning_rate 2.5e-5  \
+    --early_exit_layer 11 \
+    --precision amp \
+    --multi_exit
 ```
-`${calvin_dataset_path}` is the path to the CALVIN dataset；
-
-`${lm_path}` is the path to the pre-trained LLM；
-
-`${tokenizer_path}` is the path to the VLM tokenizer；
-
-`${openflamingo_checkpoint}` is the path to the OpenFlamingo pre-trained model；
-
-`${log_file}` is the path to the log file.
-
-We also provide `robot_flamingo/pt_run_gripper_post_ws_12_traj_aug_mpt_dolly_3b.bash` to launch the training.
-
-
-## Evaluating the model on the CALVIN benchmark
+For task ABC->D:
 ```
-python eval_ckpts.py
+# ABC
+torchrun --nnodes=1 --nproc_per_node=8 --master_port=6046 robot_flamingo/train/train_calvin_post_strategy.py \
+    --report_to_wandb \
+    --llm_name mpt_dolly_3b \
+    --traj_cons \
+    --use_gripper \
+    --from_scratch \
+    --run_name DeeR_task_ABC_D-exit-strategy \
+    --calvin_dataset /YOUR_PATH/calvin/dataset/task_ABC_D \
+    --dataset_resampled \
+    --window_size 12 \
+    --workers 1 \
+    --batch_size_calvin 4 \
+    --num_joint_epochs 4 --num_exit_epochs 1  \
+    --exit_warmup_steps 2500 --joint_warmup_steps 2500 \
+    --joint_lr_scheduler constant --exit_lr_scheduler constant  \
+    --joint_learning_rate 1e-4 --exit_lr_scale 0.25 \
+    --exit_learning_rate 2.5e-5  \
+    --early_exit_layer 11 \
+    --precision amp \
+    --multi_exit
 ```
-By adding the checkpoint name and directory into `eval_ckpts.py`, the script would automaticly load the model and evaluate it. For example, if you want to evaluate the checkpoint at path 'your-checkpoint-path', you can modify the `ckpt_dir` and `ckpt_names` variable in eval_ckpts.py, the evaluation results would be saved as 'logs/your-checkpoint-prefix.log'.
-
-## Co-finetune with both robot data (CALVIN) and vision-language data (COCO caption, VQA)
-The results shown below indicate that co-training could preserve most ability of the VLM backbone on VL tasks, while losing a bit of performance on robot tasks. 
-
-use
+For task ABCD->D:
 ```
-bash robot_flamingo/pt_run_gripper_post_ws_12_traj_aug_mpt_dolly_3b_co_train.bash
+# 
+# First jointly train VLM and action head
+torchrun --nnodes=1 --nproc_per_node=8 --master_port=6046 robot_flamingo/train/train_calvin_post_strategy.py \
+    --report_to_wandb \
+    --llm_name mpt_dolly_3b \
+    --traj_cons \
+    --use_gripper \
+    --from_scratch \
+    --run_name DeeR_task_ABCD_D-exit-strategy \
+    --calvin_dataset /YOUR_PATH/calvin/dataset/task_ABCD_D \
+    --dataset_resampled \
+    --window_size 12 \
+    --workers 1 \
+    --batch_size_calvin 4 \
+    --num_joint_epochs 3 --num_exit_epochs 0  \
+    --exit_warmup_steps 2500 --joint_warmup_steps 2500 \
+    --joint_lr_scheduler constant --exit_lr_scheduler constant  \
+    --joint_learning_rate 1e-4 --exit_lr_scale 0.25 \
+    --exit_learning_rate 2.5e-5  \
+    --early_exit_layer 11 \
+    --precision amp \
+    --multi_exit
+
+# (optional) post-train action head with slightly higher values for dropout with checkpoint from joint-train stage
+torchrun --nnodes=1 --nproc_per_node=8 --master_port=6046 robot_flamingo/train/train_calvin_post_strategy.py \
+    --report_to_wandb \
+    --llm_name mpt_dolly_3b \
+    --traj_cons \
+    --use_gripper \
+    --run_name DeeR_task_ABCD_D-exit-strategy \
+    --calvin_dataset /YOUR_PATH/calvin/dataset/task_ABCD_D \
+    --dataset_resampled \
+    --window_size 12 \
+    --workers 1 \
+    --batch_size_calvin 4 \
+    --num_joint_epochs 3 --num_exit_epochs 1  \
+    --exit_warmup_steps 2500 --joint_warmup_steps 2500 \
+    --joint_lr_scheduler constant --exit_lr_scheduler constant  \
+    --joint_learning_rate 1e-4 --exit_lr_scale 0.25 \
+    --exit_learning_rate 2.5e-5  \
+    --early_exit_layer 11 \
+    --precision amp \
+    --multi_exit \
+    --resume_from_checkpoint DeeR_task_ABCD_D-exit-strategy/stg=post_3+0_layer_11_multie_intv=2_mlpdrp=0.4_layerwise_lstmdrp=0.3_aug_10_4_traj_cons_ws_12_mpt_dolly_3b_2.pth  \
+    --exit_dropout 0.5 \
+    --lstm_dropout 0.4
 ```
-to launch co-train RoboFlamingo with CoCO, VQAV2 and CALVIN. You should update coco and vqa paths in `get_coco_dataset` and `get_vqa_dataset` in `robot_flamingo/data/data.py`.
 
-### Results on the CALVIN benchmark:
-
-|Split|SR 1|SR 2|SR 3|SR 4|SR 5|Avg Len|
-|  ----  | ----  | ---- | ---- | ---- | ---- | ---- |
-|Co-Train|ABC->D|82.9%|63.6%|45.3%|32.1%|23.4%|2.473|
-|Fine-tune|ABC->D|82.4%|61.9%|46.6%|33.1%|23.5%|2.475|
-|Co-Train|ABCD->D|95.7%|85.8%|73.7%|64.5%|56.1%|3.758|
-|Fine-tune|ABCD->D|96.4%|89.6%|82.4%|74.0%|66.2%|4.086|
-|Co-Train|ABCD->D (Enrich)|67.8%|45.2%|29.4%|18.9%|11.7%|1.73|
-|Fine-tune|ABCD->D (Enrich)|72.0%|48.0%|29.9%|21.1%|14.4%|1.854|
-
-### Results on VL tasks:
-|||||coco|||||VQA
-|----|----|----|----|----|----|----|----|----|----|
-||BLEU-1|BLEU-2|BLEU-3|BLEU-4|METEOR|ROUGE_L|CIDEr|SPICE|Acc|
-|Fine-tune (3B, zero-shot)|0.156|0.051|0.018|0.007|0.038|0.148|0.004|0.006|4.09|
-|Fine-tune (3B, 4-shot)|0.166|0.056|0.020|0.008|0.042|0.158|0.004|0.008|3.87|OpenFlamingo (3B, 4-shot) |0.608||0.459|0.329|0.232|0.220|0.491|0.808|0.164|43.86
-|Co-Train (3B, zero-shot)|0.225|0.158|0.107|0.072|0.124|0.334|0.345|0.085|36.37|Co-Train (3B, 4-shot)|0.318|0.236|0.167|0.116|0.157|0.377|0.493|0.110|38.73
-|Original Flamingo (80B, fine-tuned)|-|-|-|-|-|-|1.381|-|82.0
-
-## Acknowledgment
-This work uses code from the following open-source projects and datasets:
-
-#### CALVIN
-Original:  [https://github.com/mees/calvin](https://github.com/mees/calvin)
-License: [MIT](https://github.com/mees/calvin/blob/main/LICENSE)
-
-#### OpenAI CLIP
-Original: [https://github.com/openai/CLIP](https://github.com/openai/CLIP)
-License: [MIT](https://github.com/openai/CLIP/blob/main/LICENSE)
-
-#### OpenFlamingo
-Original: [https://github.com/mlfoundations/open_flamingo](https://github.com/mlfoundations/open_flamingo)
-License: [MIT](https://github.com/mlfoundations/open_flamingo/blob/main/LICENSE)
-
-## Cite our work:
+Train based on 9B model for task D->D:
 ```
-@article{li2023vision,
-  title     = {Vision-Language Foundation Models as Effective Robot Imitators},
-  author    = {Li, Xinghang and Liu, Minghuan and Zhang, Hanbo and Yu, Cunjun and Xu, Jie and Wu, Hongtao and Cheang, Chilam and Jing, Ya and Zhang, Weinan and Liu, Huaping and Li, Hang and Kong, Tao},
-  journal={arXiv preprint arXiv:2311.01378},
-  year={2023}
+torchrun --nnodes=1 --nproc_per_node=8 --master_port=6047 robot_flamingo/train/train_calvin_post_strategy.py \
+    --report_to_wandb \
+    --llm_name mpt_9b \
+    --traj_cons \
+    --use_gripper \
+    --from_scratch \
+    --run_name DeeR_9B_task_D_D-exit-strategy \
+    --calvin_dataset /YOUR_PATH/calvin/dataset/task_D_D \
+    --dataset_resampled \
+    --window_size 12 \
+    --workers 1 \
+    --batch_size_calvin 6 \
+    --num_joint_epochs 4 --num_exit_epochs 4  \
+    --exit_warmup_steps 2500 --joint_warmup_steps 2500 \
+    --joint_lr_scheduler constant --exit_lr_scheduler constant  \
+    --joint_learning_rate 1e-4 --exit_lr_scale 0.25 \
+    --exit_learning_rate 2.5e-5  \
+    --early_exit_layer 15 \
+    --precision amp \
+    --multi_exit
 ```
+
+## Acknowledgments
+
+This work builds upon several excellent open-source projects:
+
+- [CALVIN](https://github.com/mees/calvin) - A benchmark for Language-Conditioned Policy Learning
+- [OpenFlamingo](https://github.com/mlfoundations/open_flamingo) - An open-source framework for training large multimodal models
+- [RoboFlamingo](https://github.com/RoboFlamingo/RoboFlamingo) - Vision-Language Foundation Models as Effective Robot Imitators
+
+## Citation
+
+```bibtex
+@inproceedings{
+DeeR-VLA,
+title={DeeR-VLA: Dynamic Inference of Multimodal Large Language Models for Efficient Robot Execution},
+author={Yue, Yang and Wang, Yulin and Kang, Bingyi and Han, Yizeng and Wang, Shenzhi and Song, Shiji and Feng, Jiashi and Huang, Gao},
+booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems},
+year={2024},
+}
+```
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
