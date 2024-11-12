@@ -14,10 +14,13 @@
     <a href="https://bingykang.github.io/">Bingyi Kang<sup>2</sup></a> &emsp;
     <a href="https://yizenghan.top/">Yizeng Han<sup>1</sup></a> &emsp;
     <a href="https://shenzhi-wang.netlify.app/">Shenzhi Wang<sup>1</sup></a> &emsp;
+</p>
+<p align="center">
     <a href="https://scholar.google.com/citations?user=rw6vWdcAAAAJ&hl=zh-TW">Shiji Song<sup>1</sup></a> &emsp;
     <a href="https://sites.google.com/site/jshfeng/">Jiashi Feng<sup>2</sup></a> &emsp;
     <a href="https://www.gaohuang.net/">Gao Huang<sup>1</sup></a>
 </p>
+
 <p align="center">
     <sup>1</sup>Tsinghua University &emsp;
     <sup>2</sup>ByteDance Research
@@ -27,12 +30,6 @@
 [![arXiv](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/pdf/2411.02359)
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-blue)](https://huggingface.co/Yang130/DeeR-VLA/tree/main)
 
-<!-- <p align="center">
-  <a href="#installation">Installation</a> •
-  <a href="#pretrained-models">Pre-trained Models</a> •
-  <a href="#dynamic-inference">Dynamic Inference</a> •
-  <a href="#training">Training</a>
-</p> -->
 
 
 ## Overview
@@ -193,7 +190,9 @@ python3 bayesian_optimization.py --acq_func EI --seed 1 --num_seq 224  --n_calls
 
 ## Training
 
-Train based on 3B model for task D->D. Multi-node parallel training is also supported, offering faster training.:
+Note: Multi-node parallel training is also supported, offering faster training. Just set `--nnodes`, `--node_rank`, `--master_addr`, and `--master_port` in `torchrun`.
+
+Train based on 3B model for task D->D:
 ```
 torchrun --nnodes=1 --nproc_per_node=8 --master_port=6046 robot_flamingo/train/train_calvin_post_strategy.py \
     --report_to_wandb \
@@ -321,6 +320,11 @@ This work builds upon several excellent open-source projects:
 - [CALVIN](https://github.com/mees/calvin) - A benchmark for Language-Conditioned Policy Learning
 - [OpenFlamingo](https://github.com/mlfoundations/open_flamingo) - An open-source framework for training large multimodal models
 - [RoboFlamingo](https://github.com/RoboFlamingo/RoboFlamingo) - Vision-Language Foundation Models as Effective Robot Imitators
+
+## Notes
+The code has been reorganized, which may lead to errors or deviations from the original research results. If you encounter any issues, please report them by opening an issue. We will address any bugs promptly.
+
+
 
 ## Citation
 
