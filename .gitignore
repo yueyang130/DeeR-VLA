@@ -45,5 +45,5 @@ evaluate
 *.bin
 
 
-!arnold_before.sh
+# !arnold_before.sh
 # !run*.sh

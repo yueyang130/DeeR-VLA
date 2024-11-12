@@ -193,7 +193,7 @@ python3 bayesian_optimization.py --acq_func EI --seed 1 --num_seq 224  --n_calls
 
 ## Training
 
-Train based on 3B model for task D->D:
+Train based on 3B model for task D->D. Multi-node parallel training is also supported, offering faster training.:
 ```
 torchrun --nnodes=1 --nproc_per_node=8 --master_port=6046 robot_flamingo/train/train_calvin_post_strategy.py \
     --report_to_wandb \
@@ -333,7 +333,3 @@ booktitle={The Thirty-eighth Annual Conference on Neural Information Processing 
 year={2024},
 }
 ```
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
