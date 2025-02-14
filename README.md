@@ -5,7 +5,7 @@
   <img src="assets/images/deer.png" width="30%"/>
 </div>
 
-<h1 align="center">DeeR-VLA: Dynamic Inference of Multimodal Large Language Models for Efficient Robot Execution</h1>
+<h1 align="center">DeeR-VLA: Dynamic Inference of Multimodal Large Language Models for Efficient Robot Execution (<i>NeurIPS 24</i>)</h1>
 
 
 <p align="center">
